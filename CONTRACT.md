@@ -3,6 +3,29 @@
 Reference for `contracts/tholos`. Source of truth is `contracts/tholos/src/lib.rs`; this
 document should be updated alongside any change to the public interface.
 
+## Lifecycle
+
+```text
+                assert_outcome
+                      |
+                      v
+                  [Pending] --- dispute ---> [Disputed]
+                      |                          |
+                 challenge window            resolve (majority)
+                 elapses, no dispute             |
+                      |                          v
+                      v                     [Resolved]
+                  finalize                  (winner paid
+                (bond returned)              both bonds)
+                      |
+                      v
+                 [Resolved]
+```
+
+Every assertion ends in `Resolved`, reached one of two ways: uncontested (`finalize`
+after the challenge window with no dispute) or contested (`resolve` once a majority
+of the resolver committee agrees on one side).
+
 ## Types
 
 ### `Status`
@@ -85,6 +108,44 @@ emitted, and the function returns `Some(final_outcome)`.
 ### `get_assertion_state(id) -> Assertion`
 
 Read-only lookup. Fails with `AssertionNotFound` if the id doesn't exist.
+
+## Events
+
+Each state-changing function emits a corresponding event, topic-indexed by
+assertion `id` where applicable, so off-chain indexers can follow an assertion's
+history without polling `get_assertion_state`:
+
+| Event | Emitted by | Fields |
+| --- | --- | --- |
+| `Asserted` | `assert_outcome` | `id`, `asserter`, `outcome` |
+| `Disputed` | `dispute` | `id`, `disputer` |
+| `Finalized` | `finalize` | `id`, `outcome` |
+| `Resolved` | `resolve`, once a majority is reached | `id`, `outcome` |
+| `ResolversUpdated` | `update_resolvers` | `resolvers` (the new committee) |
+
+## Example: calling it with the Stellar CLI
+
+Deploy, initialize with a 3-member resolver committee, and post an assertion (the
+same flow `scripts/testnet-smoke.sh` automates):
+
+```sh
+CONTRACT=$(stellar contract deploy --wasm target/wasm32v1-none/release/tholos.wasm \
+  --source deployer --network testnet)
+
+stellar contract invoke --id "$CONTRACT" --source deployer --network testnet -- initialize \
+  --admin "$DEPLOYER_ADDRESS" \
+  --token "$TOKEN_CONTRACT_ID" \
+  --bond_amount 1000000 \
+  --challenge_window_secs 3600 \
+  --resolvers "[\"$R1\",\"$R2\",\"$R3\"]"
+
+stellar contract invoke --id "$CONTRACT" --source asserter --network testnet -- assert_outcome \
+  --asserter "$ASSERTER_ADDRESS" \
+  --outcome true
+```
+
+See `scripts/testnet-smoke.sh` for the full round trip including dispute and
+resolve.
 
 ## Known gaps
 
