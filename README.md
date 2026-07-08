@@ -12,7 +12,9 @@ The assertion and dispute contract (`contracts/tholos`) is implemented, tested, 
 - Fee-funded reward for uncontested finalizes: not yet (no fee-generating market layer exists to fund it)
 - Pause / emergency-stop: not yet
 
-See [CONTRACT.md](CONTRACT.md) for the full interface and known gaps.
+See [CONTRACT.md](CONTRACT.md) for the full interface and known gaps, or
+[INTEGRATION.md](INTEGRATION.md) if you're building a contract that wants to call
+into Tholos.
 
 ## Why
 
