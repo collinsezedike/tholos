@@ -1,7 +1,7 @@
 #![no_std]
 
 use soroban_sdk::{
-    contract, contractevent, contracterror, contractimpl, contracttype, token, Address, Env, Vec,
+    contract, contracterror, contractevent, contractimpl, contracttype, token, Address, Env, Vec,
 };
 
 #[contractevent]
@@ -103,7 +103,7 @@ impl Tholos {
         if env.storage().instance().has(&DataKey::Admin) {
             return Err(Error::AlreadyInitialized);
         }
-        if resolvers.len() == 0 || resolvers.len() % 2 == 0 {
+        if resolvers.is_empty() || resolvers.len().is_multiple_of(2) {
             return Err(Error::InvalidResolverCount);
         }
 
@@ -117,7 +117,9 @@ impl Tholos {
         env.storage()
             .instance()
             .set(&DataKey::ChallengeWindow, &challenge_window_secs);
-        env.storage().instance().set(&DataKey::Resolvers, &resolvers);
+        env.storage()
+            .instance()
+            .set(&DataKey::Resolvers, &resolvers);
         env.storage().instance().set(&DataKey::NextId, &0u64);
         env.storage()
             .instance()
@@ -135,7 +137,7 @@ impl Tholos {
 
         token::Client::new(&env, &token_id).transfer(
             &asserter,
-            &env.current_contract_address(),
+            env.current_contract_address(),
             &bond_amount,
         );
 
@@ -183,7 +185,7 @@ impl Tholos {
         let token_id: Address = Self::get(&env, &DataKey::Token);
         token::Client::new(&env, &token_id).transfer(
             &disputer,
-            &env.current_contract_address(),
+            env.current_contract_address(),
             &assertion.bond,
         );
 
@@ -234,7 +236,12 @@ impl Tholos {
     /// the resolver committee agrees, the assertion finalizes: the winning
     /// side (asserter if the original outcome stands, disputer otherwise)
     /// receives both bonds.
-    pub fn resolve(env: Env, resolver: Address, id: u64, agrees_with_asserter: bool) -> Result<Option<bool>, Error> {
+    pub fn resolve(
+        env: Env,
+        resolver: Address,
+        id: u64,
+        agrees_with_asserter: bool,
+    ) -> Result<Option<bool>, Error> {
         resolver.require_auth();
 
         let resolvers: Vec<Address> = Self::get(&env, &DataKey::Resolvers);
