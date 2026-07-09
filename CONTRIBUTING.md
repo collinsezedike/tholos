@@ -117,8 +117,8 @@ If you changed the contract's public interface (functions, types, errors), updat
 
 ## Commit messages
 
-One-line, imperative, conventional-commit style: `feat: `, `fix: `, `docs: `, `test: `,
-`ci: `, etc., followed by a concise summary. No comma-separated lists of unrelated
+One-line, imperative, conventional-commit style: `feat:`, `fix:`, `docs:`, `test:`,
+`ci:`, etc., followed by a concise summary. No comma-separated lists of unrelated
 changes in a single message; split them into separate commits instead.
 
 ## Opening a PR
