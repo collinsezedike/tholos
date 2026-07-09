@@ -55,14 +55,13 @@ A bond gets posted, a window gives anyone the chance to dispute it, and if dispu
 
 ```text
 contracts/
-  tholos/            The assertion and dispute contract
-    src/
-      lib.rs          Contract logic
-      test.rs         Unit tests (soroban-sdk testutils, mocked ledger and auth)
+  tholos/               The assertion and dispute contract
+  demo-consumer/        Minimal example contract that calls into Tholos,
+                         validating the pattern documented in INTEGRATION.md
 scripts/
-  testnet-smoke.sh    End-to-end check against real Stellar testnet infrastructure
+  testnet-smoke.sh      End-to-end check against real Stellar testnet infrastructure
 .github/workflows/
-  ci.yml              Runs fmt, clippy, tests, and the wasm build on every push/PR
+  ci.yml                 Runs fmt, clippy, tests, and the wasm build on every push/PR
 ```
 
 ## Development
@@ -70,6 +69,10 @@ scripts/
 Requires the Rust toolchain with the `wasm32v1-none` target, plus the [Stellar CLI](https://developers.stellar.org/docs/tools/cli/install-cli) for building and deploying the contract.
 
 ```sh
+# Build tholos's wasm first: demo-consumer imports it at compile time, so this
+# has to exist before anything below touches the rest of the workspace.
+cargo build -p tholos --target wasm32v1-none --release
+
 # Run unit tests
 cargo test
 
@@ -77,7 +80,7 @@ cargo test
 cargo fmt --check
 cargo clippy --workspace --all-targets -- -D warnings
 
-# Build the optimized contract wasm
+# Build the optimized, deployable contract wasm
 cd contracts/tholos && stellar contract build
 ```
 

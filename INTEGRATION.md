@@ -24,6 +24,12 @@ received back from `assert_outcome`. Store that mapping on your side (e.g.
 
 ## Calling Tholos from another Soroban contract
 
+`contracts/demo-consumer` is a working, tested example of this, not just a
+snippet: its `create_assertion` and `get_status` functions are the pattern below,
+and its test deploys Tholos's actual compiled wasm and calls through it. If
+anything here goes stale, that crate's `cargo test -p demo-consumer` is what
+would catch it.
+
 Import the client from the deployed contract's WASM and call it like any other
 cross-contract invocation:
 
@@ -32,22 +38,52 @@ use soroban_sdk::{contractimport, Address, Env};
 
 mod tholos {
     soroban_sdk::contractimport!(
-        file = "../tholos/target/wasm32v1-none/release/tholos.wasm"
+        file = "../../target/wasm32v1-none/release/tholos.wasm"
     );
 }
 
-fn resolve_my_condition(env: Env, tholos_id: Address, outcome: bool) -> u64 {
+fn create_assertion(env: Env, tholos_id: Address, asserter: Address, outcome: bool) -> u64 {
     let client = tholos::Client::new(&env, &tholos_id);
-    client.assert_outcome(&env.current_contract_address(), &outcome)
+    client.assert_outcome(&asserter, &outcome)
 }
 ```
 
-Your contract's address can be the `asserter`, in which case your contract's own
-`require_auth` logic (or lack of it) governs who can trigger an assertion on your
-behalf. Whoever ends up as `asserter` is whoever gets the bond back on an
-uncontested finalize, so decide deliberately whether that should be your contract
-(pooling bonds under your own control) or an end user's address (bond returns
-directly to them).
+`contractimport!` reads the wasm file **at your crate's compile time**, so it has
+to already exist on disk before you build. In this repo that means running
+`cargo build -p tholos --target wasm32v1-none --release` before touching
+`demo-consumer` (see [CONTRIBUTING.md](CONTRIBUTING.md)); if Tholos is a separate
+repo for you, the same constraint applies to wherever its wasm gets built.
+
+### Who should be the `asserter`: your contract, or the end user?
+
+This is the decision that has the most integration friction, and it's worth
+getting right before you write the code.
+
+**End user as asserter (what `demo-consumer` does, and the default recommendation).**
+Pass through an `Address` the caller provides, as above. The user's own signature
+authorizes `assert_outcome` and the underlying bond transfer directly; your
+contract doesn't need any special auth plumbing. The tradeoff: because that
+signature lives on an argument to *your* function rather than the top-level call,
+if you're writing tests against this you need
+`env.mock_all_auths_allowing_non_root_auth()` rather than plain `mock_all_auths()`
+(see `demo-consumer/src/test.rs`), and on a real network the transaction needs an
+authorization entry for that address alongside whatever signs the outer call.
+
+**Your contract's own address as asserter.** Bonds pool under your contract's
+control (e.g. to later distribute pro-rata to your own users) instead of going
+directly to an end user. This is meaningfully harder than it looks: Tholos's
+`assert_outcome` calls the underlying token's `transfer`, which itself calls
+`require_auth()` on the asserter. That's *two* contract calls away from your
+contract (yours -> Tholos -> token), and Soroban only auto-grants a contract's
+implicit self-authorization one call deep. The deeper call fails with
+`Error(Auth, InvalidAction)` unless you explicitly pre-authorize it with
+[`env.authorize_as_current_contract`](https://docs.rs/soroban-sdk/latest/soroban_sdk/struct.Env.html#method.authorize_as_current_contract)
+before invoking Tholos, specifying the exact token contract, `transfer` args, and
+amount Tholos will end up calling. That means you need to already know Tholos's
+configured token and bond amount to construct the right authorization, since
+there's no way to ask Tholos for the sub-invocation it's about to make ahead of
+time. Only take this path if pooling bonds under your contract is a real
+requirement, not a default choice.
 
 ## Lifecycle from an integrator's perspective
 

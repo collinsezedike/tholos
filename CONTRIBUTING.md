@@ -5,32 +5,45 @@
 - Rust toolchain (stable) with the `wasm32v1-none` target: `rustup target add wasm32v1-none`
 - [Stellar CLI](https://developers.stellar.org/docs/tools/cli/install-cli), for building and deploying the contract
 
-Clone the repo and confirm the toolchain is wired up:
+Clone the repo, then build Tholos's wasm once before anything else:
 
 ```sh
+cargo build -p tholos --target wasm32v1-none --release
 cargo test
 ```
 
-That runs the unit test suite against the native target (fast, no wasm build or
-network access required) and is the right first thing to run after any change.
+The first command is required, not optional: `demo-consumer` imports Tholos's
+compiled wasm at compile time (`contractimport!`), so `cargo test`,
+`cargo clippy --workspace`, and any IDE build of the workspace will fail on a fresh
+checkout until that file exists. Only re-run it after changing `contracts/tholos`;
+`demo-consumer` alone doesn't need a rebuild between runs.
 
 ## Project layout
 
 ```text
 contracts/
-  tholos/            The assertion and dispute contract
+  tholos/               The assertion and dispute contract
     src/
-      lib.rs          Contract logic
-      test.rs         Unit tests (soroban-sdk testutils, mocked ledger and auth)
+      lib.rs             Contract logic
+      test.rs            Unit tests (soroban-sdk testutils, mocked ledger and auth)
+  demo-consumer/        Minimal example contract that calls into Tholos
+    src/
+      lib.rs             Cross-contract call pattern from INTEGRATION.md
+      test.rs            Validates that pattern against Tholos's real compiled wasm
 scripts/
-  testnet-smoke.sh    End-to-end check against real Stellar testnet infrastructure
+  testnet-smoke.sh      End-to-end check against real Stellar testnet infrastructure
 .github/workflows/
-  ci.yml              Runs fmt, clippy, tests, and the wasm build on every push/PR
+  ci.yml                 Runs fmt, clippy, tests, and the wasm build on every push/PR
 ```
 
-If a second contract is added later (e.g. a market factory), it should live as its
-own crate under `contracts/`, added to the `[workspace] members` list in the root
-`Cargo.toml`, following the same layout as `contracts/tholos`.
+`demo-consumer` exists to keep INTEGRATION.md honest: it's not a product, it's a
+compiled check that the documented integration pattern actually works. If you
+change Tholos's public interface, update `demo-consumer` too if it uses the
+changed function, and re-run its test.
+
+If a second real contract is added later (e.g. a market factory), it should live as
+its own crate under `contracts/`, added to the `[workspace] members` list in the
+root `Cargo.toml`, following the same layout as `contracts/tholos`.
 
 ## Testing philosophy
 
@@ -67,10 +80,12 @@ There are two layers, and they catch different things:
 
 ## Before opening a PR
 
-Run the same checks CI runs:
+Run the same checks CI runs, in this order (see the note above on why the wasm
+build has to come first):
 
 ```sh
 cargo fmt --check
+cargo build -p tholos --target wasm32v1-none --release
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test
 ```

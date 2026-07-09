@@ -23,6 +23,12 @@ jobs:
       - name: Check formatting
         run: cargo fmt --check
 
+      # demo-consumer imports tholos's compiled wasm at compile time
+      # (contractimport!), so it must exist before anything below this
+      # touches demo-consumer: clippy and test both compile it.
+      - name: Build tholos wasm
+        run: cargo build -p tholos --target wasm32v1-none --release
+
       - name: Run clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
 
