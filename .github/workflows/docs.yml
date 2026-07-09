@@ -6,12 +6,7 @@ on:
     paths:
       - "book/**"
       - "README.md"
-      - "CONTRACT.md"
-      - "INTEGRATION.md"
       - "CONTRIBUTING.md"
-      - "ARCHITECTURE.md"
-      - "DEPLOYMENT.md"
-      - "GLOSSARY.md"
       - "SECURITY.md"
       - "CHANGELOG.md"
       - ".github/workflows/docs.yml"
