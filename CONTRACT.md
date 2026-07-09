@@ -9,8 +9,8 @@ document should be updated alongside any change to the public interface.
 stateDiagram-v2
     [*] --> Pending: assert_outcome
     Pending --> Disputed: dispute
-    Pending --> Resolved: finalize\n(challenge window elapsed,\nbond returned)
-    Disputed --> Resolved: resolve\n(majority reached,\nwinner paid both bonds)
+    Pending --> Resolved: finalize<br/>(challenge window elapsed,<br/>bond returned)
+    Disputed --> Resolved: resolve<br/>(majority reached,<br/>winner paid both bonds)
     Resolved --> [*]
 ```
 
