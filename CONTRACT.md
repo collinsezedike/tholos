@@ -109,6 +109,18 @@ emitted, and the function returns `Some(final_outcome)`.
 
 Read-only lookup. Fails with `AssertionNotFound` if the id doesn't exist.
 
+## Security notes
+
+`assert_outcome`, `dispute`, `finalize`, and `resolve` each write their state
+change (new assertion, status transition, vote tally) to storage *before* calling
+the external token contract's `transfer`. This follows checks-effects-interactions
+deliberately: cross-contract calls in Soroban are synchronous, so a non-standard
+or malicious `token` contract could otherwise call back into Tholos mid-transfer
+and observe stale state (e.g. an assertion still `Pending` when it's actually
+already being finalized), enabling a double payout drawn from the pooled bonds of
+unrelated assertions. `contracts/tholos/src/test.rs::test_finalize_is_not_reentrant`
+exercises this directly against a token that attempts exactly that reentrant call.
+
 ## Events
 
 Each state-changing function emits a corresponding event, topic-indexed by

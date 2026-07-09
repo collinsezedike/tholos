@@ -163,18 +163,15 @@ impl Tholos {
     pub fn assert_outcome(env: Env, asserter: Address, outcome: bool) -> Result<u64, Error> {
         asserter.require_auth();
 
-        let token_id: Address = Self::get(&env, &DataKey::Token);
         let bond_amount: i128 = Self::get(&env, &DataKey::BondAmount);
 
-        token::Client::new(&env, &token_id).transfer(
-            &asserter,
-            env.current_contract_address(),
-            &bond_amount,
-        );
-
+        // The new id is reserved and the assertion written before the
+        // external token transfer below, so a reentrant call during the
+        // transfer can't be allocated the same not-yet-incremented id.
         let id: u64 = env.storage().instance().get(&DataKey::NextId).unwrap_or(0);
+        env.storage().instance().set(&DataKey::NextId, &(id + 1));
         let assertion = Assertion {
-            asserter,
+            asserter: asserter.clone(),
             outcome,
             bond: bond_amount,
             opened_at: env.ledger().timestamp(),
@@ -184,14 +181,20 @@ impl Tholos {
             votes_against_outcome: 0,
             voted: Vec::new(&env),
         };
-
         env.storage()
             .persistent()
             .set(&DataKey::Assertion(id), &assertion);
-        env.storage().instance().set(&DataKey::NextId, &(id + 1));
+
+        let token_id: Address = Self::get(&env, &DataKey::Token);
+        token::Client::new(&env, &token_id).transfer(
+            &asserter,
+            env.current_contract_address(),
+            &bond_amount,
+        );
+
         Asserted {
             id,
-            asserter: assertion.asserter,
+            asserter,
             outcome,
         }
         .publish(&env);
@@ -213,6 +216,15 @@ impl Tholos {
             return Err(Error::ChallengeWindowClosed);
         }
 
+        // State is written before the external token transfer below so that
+        // a reentrant call from a non-standard token sees this assertion as
+        // already disputed, rather than still `Pending`.
+        assertion.disputer = Some(disputer.clone());
+        assertion.status = Status::Disputed;
+        env.storage()
+            .persistent()
+            .set(&DataKey::Assertion(id), &assertion);
+
         let token_id: Address = Self::get(&env, &DataKey::Token);
         token::Client::new(&env, &token_id).transfer(
             &disputer,
@@ -220,11 +232,6 @@ impl Tholos {
             &assertion.bond,
         );
 
-        assertion.disputer = Some(disputer.clone());
-        assertion.status = Status::Disputed;
-        env.storage()
-            .persistent()
-            .set(&DataKey::Assertion(id), &assertion);
         Disputed { id, disputer }.publish(&env);
 
         Ok(())
@@ -243,6 +250,14 @@ impl Tholos {
             return Err(Error::ChallengeWindowOpen);
         }
 
+        // State is written before the external token transfer below so that
+        // a reentrant call from a non-standard token sees this assertion as
+        // already resolved, rather than still `Pending`.
+        assertion.status = Status::Resolved;
+        env.storage()
+            .persistent()
+            .set(&DataKey::Assertion(id), &assertion);
+
         let token_id: Address = Self::get(&env, &DataKey::Token);
         token::Client::new(&env, &token_id).transfer(
             &env.current_contract_address(),
@@ -250,10 +265,6 @@ impl Tholos {
             &assertion.bond,
         );
 
-        assertion.status = Status::Resolved;
-        env.storage()
-            .persistent()
-            .set(&DataKey::Assertion(id), &assertion);
         Finalized {
             id,
             outcome: assertion.outcome,
@@ -311,29 +322,33 @@ impl Tholos {
             return Ok(None);
         };
 
-        let token_id: Address = Self::get(&env, &DataKey::Token);
         let payout = assertion.bond * 2;
         let winner = if winner_is_asserter {
             assertion.asserter.clone()
         } else {
             assertion.disputer.clone().unwrap()
         };
-        token::Client::new(&env, &token_id).transfer(
-            &env.current_contract_address(),
-            &winner,
-            &payout,
-        );
-
-        assertion.status = Status::Resolved;
-        env.storage()
-            .persistent()
-            .set(&DataKey::Assertion(id), &assertion);
-
         let final_outcome = if winner_is_asserter {
             assertion.outcome
         } else {
             !assertion.outcome
         };
+
+        // State is written before the external token transfer below so that
+        // a reentrant call from a non-standard token sees this assertion as
+        // already resolved (and this resolver as already voted), rather than
+        // still open for further votes.
+        assertion.status = Status::Resolved;
+        env.storage()
+            .persistent()
+            .set(&DataKey::Assertion(id), &assertion);
+
+        let token_id: Address = Self::get(&env, &DataKey::Token);
+        token::Client::new(&env, &token_id).transfer(
+            &env.current_contract_address(),
+            &winner,
+            &payout,
+        );
         Resolved {
             id,
             outcome: final_outcome,

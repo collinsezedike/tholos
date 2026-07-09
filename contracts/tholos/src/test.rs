@@ -387,3 +387,126 @@ fn test_operations_on_unknown_assertion_fail() {
         Err(Ok(Error::AssertionNotFound))
     );
 }
+
+/// A minimal token that reenters Tholos's `finalize` from inside its own
+/// `transfer`, before doing its own balance bookkeeping. Models a malicious
+/// or merely non-standard (e.g. hook-bearing) SEP-41 token, to prove state is
+/// written before the external transfer rather than after it.
+mod evil_token {
+    use soroban_sdk::{contract, contractimpl, symbol_short, Address, Env, Map};
+
+    #[contract]
+    pub struct EvilToken;
+
+    #[contractimpl]
+    impl EvilToken {
+        pub fn configure(env: Env, tholos_id: Address, target_id: u64) {
+            env.storage()
+                .instance()
+                .set(&symbol_short!("tholos"), &tholos_id);
+            env.storage()
+                .instance()
+                .set(&symbol_short!("target"), &target_id);
+        }
+
+        pub fn credit(env: Env, addr: Address, amount: i128) {
+            let mut balances: Map<Address, i128> = env
+                .storage()
+                .instance()
+                .get(&symbol_short!("bal"))
+                .unwrap_or(Map::new(&env));
+            let current = balances.get(addr.clone()).unwrap_or(0);
+            balances.set(addr, current + amount);
+            env.storage()
+                .instance()
+                .set(&symbol_short!("bal"), &balances);
+        }
+
+        pub fn balance(env: Env, addr: Address) -> i128 {
+            let balances: Map<Address, i128> = env
+                .storage()
+                .instance()
+                .get(&symbol_short!("bal"))
+                .unwrap_or(Map::new(&env));
+            balances.get(addr).unwrap_or(0)
+        }
+
+        pub fn transfer(env: Env, from: Address, to: Address, amount: i128) {
+            if let Some(tholos_id) = env
+                .storage()
+                .instance()
+                .get::<_, Address>(&symbol_short!("tholos"))
+            {
+                let target_id: u64 = env
+                    .storage()
+                    .instance()
+                    .get(&symbol_short!("target"))
+                    .unwrap();
+                let client = super::TholosClient::new(&env, &tholos_id);
+                // A well-behaved caller would fail cleanly here if Tholos has
+                // already written its state; that's exactly what this test
+                // verifies. Ignore the result either way.
+                let _ = client.try_finalize(&target_id);
+            }
+
+            let mut balances: Map<Address, i128> = env
+                .storage()
+                .instance()
+                .get(&symbol_short!("bal"))
+                .unwrap_or(Map::new(&env));
+            let from_bal = balances.get(from.clone()).unwrap_or(0);
+            let to_bal = balances.get(to.clone()).unwrap_or(0);
+            balances.set(from, from_bal - amount);
+            balances.set(to, to_bal + amount);
+            env.storage()
+                .instance()
+                .set(&symbol_short!("bal"), &balances);
+        }
+    }
+}
+
+#[test]
+fn test_finalize_is_not_reentrant() {
+    use evil_token::{EvilToken, EvilTokenClient};
+
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let evil_token_id = env.register(EvilToken, ());
+    let evil_token = EvilTokenClient::new(&env, &evil_token_id);
+
+    let resolvers = Vec::from_array(
+        &env,
+        [
+            Address::generate(&env),
+            Address::generate(&env),
+            Address::generate(&env),
+        ],
+    );
+    let contract_id = env.register(Tholos, ());
+    let client = TholosClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let asserter = Address::generate(&env);
+    evil_token.credit(&asserter, &1_000);
+    client.initialize(&admin, &evil_token_id, &100, &3600, &resolvers);
+
+    // The reentrancy trap isn't armed yet, so this assert_outcome call's own
+    // transfer doesn't try to reenter anything.
+    let id = client.assert_outcome(&asserter, &true);
+    assert_eq!(evil_token.balance(&asserter), 900);
+
+    env.ledger().with_mut(|l| l.timestamp += 3601);
+
+    // Arm the trap: EvilToken.transfer will now try to reenter finalize(id)
+    // on itself, before finalize's own transfer call even returns.
+    evil_token.configure(&contract_id, &id);
+
+    let outcome = client.finalize(&id);
+    assert!(outcome);
+
+    // Exactly one bond's worth was returned, not two. If Tholos wrote state
+    // after the transfer instead of before, the reentrant finalize call
+    // would have seen the assertion as still `Pending` and paid out again.
+    assert_eq!(evil_token.balance(&asserter), 1_000);
+}
