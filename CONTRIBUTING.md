@@ -28,7 +28,7 @@ contracts/
       test.rs            Unit tests (soroban-sdk testutils, mocked ledger and auth)
   demo-consumer/        Minimal example contract that calls into Tholos
     src/
-      lib.rs             Cross-contract call pattern from book/src/INTEGRATION.md
+      lib.rs             Cross-contract call pattern from docs/src/INTEGRATION.md
       test.rs            Validates that pattern against Tholos's real compiled wasm
 scripts/
   testnet-smoke.sh      End-to-end check against real Stellar testnet infrastructure
@@ -36,7 +36,7 @@ scripts/
   ci.yml                 Runs fmt, clippy, tests, and the wasm build on every push/PR
 ```
 
-`demo-consumer` exists to keep [INTEGRATION.md](book/src/INTEGRATION.md) honest: it's not a product, it's a
+`demo-consumer` exists to keep [INTEGRATION.md](docs/src/INTEGRATION.md) honest: it's not a product, it's a
 compiled check that the documented integration pattern actually works. If you
 change Tholos's public interface, update `demo-consumer` too if it uses the
 changed function, and re-run its test.
@@ -80,7 +80,7 @@ There are two layers, and they catch different things:
 
 ## Docs site
 
-`book/` is an [mdBook](https://rust-lang.github.io/mdBook/) that publishes this
+`docs/` is an [mdBook](https://rust-lang.github.io/mdBook/) that publishes this
 repo's docs as a site, deployed automatically from `main` by
 `.github/workflows/docs.yml`. Where a given doc's real content lives depends on
 whether GitHub treats it specially:
@@ -89,15 +89,15 @@ whether GitHub treats it specially:
   stay at the repo root, because GitHub does something with them there (README
   renders on the repo homepage, CONTRIBUTING is linked when opening an issue/PR,
   SECURITY.md powers the Security tab, and CHANGELOG.md is close enough to a
-  universal convention to keep at root regardless). Their `book/src/` copies are
+  universal convention to keep at root regardless). Their `docs/src/` copies are
   one-line `\{{#include ../../X.md}}` stubs; edit the root file, not the stub.
 - `ARCHITECTURE.md`, `CONTRACT.md`, `DEPLOYMENT.md`, `GLOSSARY.md`, and
   `INTEGRATION.md` get no special treatment from GitHub at root, so their real
-  content lives directly under `book/src/`, with no root duplicate. Edit them
+  content lives directly under `docs/src/`, with no root duplicate. Edit them
   there; they're still normal markdown files GitHub renders fine if you click into
-  `book/src/CONTRACT.md` directly, they just aren't at the repo's top level.
+  `docs/src/CONTRACT.md` directly, they just aren't at the repo's top level.
 
-Preview locally with `mdbook serve book` (requires `cargo install mdbook`).
+Preview locally with `mdbook serve docs` (requires `cargo install mdbook`).
 
 ## Before opening a PR
 
@@ -112,7 +112,7 @@ cargo test
 ```
 
 If you changed the contract's public interface (functions, types, errors), update
-[CONTRACT.md](book/src/CONTRACT.md) to match; it's meant to stay in sync with
+[CONTRACT.md](docs/src/CONTRACT.md) to match; it's meant to stay in sync with
 `lib.rs`, not drift into a separate design doc.
 
 ## Commit messages

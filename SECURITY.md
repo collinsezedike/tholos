@@ -5,7 +5,7 @@
 Tholos has not had an external security audit. It has undergone one internal
 review pass, which found and fixed a real reentrancy vulnerability (see
 [CHANGELOG.md](CHANGELOG.md) and the "Security notes" section of
-[CONTRACT.md](book/src/CONTRACT.md)). Treat it as pre-production software: appropriate for
+[CONTRACT.md](docs/src/CONTRACT.md)). Treat it as pre-production software: appropriate for
 testnet use and further review, not for deployments securing meaningful value on
 mainnet until it has been audited.
 

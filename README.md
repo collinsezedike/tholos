@@ -19,12 +19,12 @@ The assertion and dispute contract (`contracts/tholos`) is implemented, tested, 
 - CI (fmt, clippy, tests, wasm build): done
 - Fee-funded reward for uncontested finalizes: not yet (no fee-generating market layer exists to fund it)
 
-See [CONTRACT.md](book/src/CONTRACT.md) for the full interface and known gaps,
-[ARCHITECTURE.md](book/src/ARCHITECTURE.md) for design rationale, or
-[INTEGRATION.md](book/src/INTEGRATION.md) if you're building a contract that wants
+See [CONTRACT.md](docs/src/CONTRACT.md) for the full interface and known gaps,
+[ARCHITECTURE.md](docs/src/ARCHITECTURE.md) for design rationale, or
+[INTEGRATION.md](docs/src/INTEGRATION.md) if you're building a contract that wants
 to call into Tholos. Deploying your own instance: see
-[DEPLOYMENT.md](book/src/DEPLOYMENT.md). New to the terminology: see
-[GLOSSARY.md](book/src/GLOSSARY.md).
+[DEPLOYMENT.md](docs/src/DEPLOYMENT.md). New to the terminology: see
+[GLOSSARY.md](docs/src/GLOSSARY.md).
 
 ## Why
 
@@ -43,7 +43,7 @@ stateDiagram-v2
     Resolved --> [*]
 ```
 
-A bond gets posted, a window gives anyone the chance to dispute it, and if disputed, a resolver committee votes to decide who was right. See [CONTRACT.md](book/src/CONTRACT.md) for the function reference and events, or [ARCHITECTURE.md](book/src/ARCHITECTURE.md) for sequence diagrams of each flow.
+A bond gets posted, a window gives anyone the chance to dispute it, and if disputed, a resolver committee votes to decide who was right. See [CONTRACT.md](docs/src/CONTRACT.md) for the function reference and events, or [ARCHITECTURE.md](docs/src/ARCHITECTURE.md) for sequence diagrams of each flow.
 
 ## Tech stack
 

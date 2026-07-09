@@ -19,7 +19,7 @@ Initial release: a working, tested, testnet-deployed assertion and dispute oracl
   paused.
 - `contracts/demo-consumer`: a minimal example contract calling into Tholos,
   validating the cross-contract integration pattern documented in
-  [INTEGRATION.md](book/src/INTEGRATION.md) against Tholos's real compiled wasm.
+  [INTEGRATION.md](docs/src/INTEGRATION.md) against Tholos's real compiled wasm.
 - `scripts/testnet-smoke.sh`: an end-to-end check against real Stellar testnet
   infrastructure (deploy, initialize, assert, dispute, resolve).
 - CI (`fmt`, `clippy`, `test`, wasm build) on every push and pull request.
