@@ -38,6 +38,11 @@ pub struct ResolversUpdated {
     pub resolvers: Vec<Address>,
 }
 
+#[contractevent]
+pub struct PauseUpdated {
+    pub paused: bool,
+}
+
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Status {
@@ -69,6 +74,7 @@ pub enum DataKey {
     Resolvers,
     Assertion(u64),
     NextId,
+    Paused,
 }
 
 #[contracterror]
@@ -84,6 +90,7 @@ pub enum Error {
     ChallengeWindowOpen = 8,
     NotAResolver = 9,
     AlreadyVoted = 10,
+    Paused = 11,
 }
 
 const DAY_IN_LEDGERS: u32 = 17280;
@@ -126,6 +133,7 @@ impl Tholos {
             .instance()
             .set(&DataKey::Resolvers, &resolvers);
         env.storage().instance().set(&DataKey::NextId, &0u64);
+        env.storage().instance().set(&DataKey::Paused, &false);
         env.storage()
             .instance()
             .extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
@@ -135,7 +143,8 @@ impl Tholos {
 
     /// Replaces the resolver committee. Only callable by the admin set at
     /// initialization. `new_resolvers` must have an odd length so a simple
-    /// majority vote can never tie.
+    /// majority vote can never tie. Callable even while paused, so a
+    /// compromised committee can be replaced without waiting to unpause.
     pub fn update_resolvers(env: Env, new_resolvers: Vec<Address>) -> Result<(), Error> {
         let admin: Address = env
             .storage()
@@ -159,8 +168,39 @@ impl Tholos {
         Ok(())
     }
 
+    /// Pauses or unpauses new assertions, disputes, and resolver votes.
+    /// Assertions already `Pending` can still be `finalize`d while paused,
+    /// so existing uncontested claims aren't stuck waiting on an unpause.
+    /// Only callable by the admin set at initialization.
+    pub fn set_paused(env: Env, paused: bool) -> Result<(), Error> {
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .ok_or(Error::NotInitialized)?;
+        admin.require_auth();
+
+        env.storage().instance().set(&DataKey::Paused, &paused);
+        PauseUpdated { paused }.publish(&env);
+
+        Ok(())
+    }
+
+    fn require_not_paused(env: &Env) -> Result<(), Error> {
+        let paused: bool = env
+            .storage()
+            .instance()
+            .get(&DataKey::Paused)
+            .ok_or(Error::NotInitialized)?;
+        if paused {
+            return Err(Error::Paused);
+        }
+        Ok(())
+    }
+
     /// Posts a bonded claim about an outcome. Returns the new assertion id.
     pub fn assert_outcome(env: Env, asserter: Address, outcome: bool) -> Result<u64, Error> {
+        Self::require_not_paused(&env)?;
         asserter.require_auth();
 
         let bond_amount: i128 = Self::get(&env, &DataKey::BondAmount);
@@ -204,6 +244,7 @@ impl Tholos {
 
     /// Disputes a pending assertion within the challenge window by matching its bond.
     pub fn dispute(env: Env, disputer: Address, id: u64) -> Result<(), Error> {
+        Self::require_not_paused(&env)?;
         disputer.require_auth();
 
         let mut assertion = Self::get_assertion(&env, id)?;
@@ -284,6 +325,7 @@ impl Tholos {
         id: u64,
         agrees_with_asserter: bool,
     ) -> Result<Option<bool>, Error> {
+        Self::require_not_paused(&env)?;
         resolver.require_auth();
 
         let resolvers: Vec<Address> = Self::get(&env, &DataKey::Resolvers);

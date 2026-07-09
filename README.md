@@ -8,9 +8,10 @@ The assertion and dispute contract (`contracts/tholos`) is implemented, tested, 
 
 - Core propose/dispute/resolve flow: done
 - Admin-controlled resolver committee updates: done
+- Pause / emergency-stop: done
+- Reentrancy hardening (state written before external token transfers): done
 - CI (fmt, clippy, tests, wasm build): done
 - Fee-funded reward for uncontested finalizes: not yet (no fee-generating market layer exists to fund it)
-- Pause / emergency-stop: not yet
 
 See [CONTRACT.md](CONTRACT.md) for the full interface and known gaps, or
 [INTEGRATION.md](INTEGRATION.md) if you're building a contract that wants to call

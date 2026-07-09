@@ -59,6 +59,7 @@ State of an assertion: `Pending`, `Disputed`, or `Resolved`.
 | `ChallengeWindowOpen` | Tried to finalize before the challenge window elapsed |
 | `NotAResolver` | Caller isn't in the current resolver committee |
 | `AlreadyVoted` | Resolver already voted on this assertion |
+| `Paused` | Called `assert_outcome`, `dispute`, or `resolve` while paused |
 
 ## Functions
 
@@ -76,17 +77,26 @@ odd-length requirement as `initialize`. Emits `ResolversUpdated`. Does not affec
 longer cast further votes; a resolver added mid-dispute can vote on assertions that
 were already disputed before they joined.
 
+### `set_paused(paused)`
+
+Pauses or unpauses `assert_outcome`, `dispute`, and `resolve`. Requires the stored
+admin's signature. `finalize` is deliberately exempt: assertions already `Pending`
+before a pause can still be finalized while paused, so an uncontested claim isn't
+stuck waiting on an unpause. `update_resolvers` is also exempt, so a compromised
+committee can be replaced without unpausing first. Emits `PauseUpdated`.
+
 ### `assert_outcome(asserter, outcome) -> u64`
 
 Posts a bonded claim. Transfers `bond_amount` from `asserter` to the contract.
-Requires `asserter`'s signature. Returns the new assertion id. Emits `Asserted`.
+Requires `asserter`'s signature. Fails with `Paused` if paused. Returns the new
+assertion id. Emits `Asserted`.
 
 ### `dispute(disputer, id)`
 
 Disputes a `Pending` assertion within the challenge window, matching its bond.
-Requires `disputer`'s signature. Fails with `NotPending` if the assertion isn't
-pending (including if it's already disputed), or `ChallengeWindowClosed` if the
-window has elapsed. Emits `Disputed`.
+Requires `disputer`'s signature. Fails with `Paused` if paused, `NotPending` if the
+assertion isn't pending (including if it's already disputed), or
+`ChallengeWindowClosed` if the window has elapsed. Emits `Disputed`.
 
 ### `finalize(id) -> bool`
 
@@ -97,8 +107,8 @@ dispute. Returns the asserter's bond and returns the asserted outcome. Fails wit
 ### `resolve(resolver, id, agrees_with_asserter) -> Option<bool>`
 
 Casts one resolver's vote on a `Disputed` assertion. Requires `resolver`'s signature
-and that they're in the current committee. Fails with `NotAResolver`,
-`NotDisputed`, or `AlreadyVoted` as appropriate.
+and that they're in the current committee. Fails with `Paused` if paused,
+`NotAResolver`, `NotDisputed`, or `AlreadyVoted` as appropriate.
 
 Returns `None` if no side has reached a strict majority yet. Once a majority agrees,
 the winning side (asserter if the majority agreed with them, disputer otherwise)
@@ -134,6 +144,7 @@ history without polling `get_assertion_state`:
 | `Finalized` | `finalize` | `id`, `outcome` |
 | `Resolved` | `resolve`, once a majority is reached | `id`, `outcome` |
 | `ResolversUpdated` | `update_resolvers` | `resolvers` (the new committee) |
+| `PauseUpdated` | `set_paused` | `paused` |
 
 ## Example: calling it with the Stellar CLI
 
@@ -164,7 +175,6 @@ resolve.
 - No fee/reward mechanism for uncontested finalizes: the original design called for
   a small reward funded by market fees, but no fee-generating market layer exists
   yet, so `finalize` just returns the bond as-is.
-- No pause or emergency-stop.
-- `update_resolvers` is a single-admin-key operation, which is a bigger centralization
+- `set_paused` and `update_resolvers` are both single-admin-key operations, which is a bigger centralization
   point than the resolver committee itself. A resolver self-rotation scheme (the
   committee votes to replace one of its own) was considered but not built for v1.

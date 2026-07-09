@@ -324,6 +324,62 @@ fn test_admin_can_update_resolvers() {
 }
 
 #[test]
+fn test_paused_blocks_assert_dispute_and_resolve_but_not_finalize() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (_token_admin, token_id, token, resolvers) = setup(&env);
+    let token_asset_client = token::StellarAssetClient::new(&env, &token_id);
+    let contract_id = env.register(Tholos, ());
+    let client = TholosClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let asserter = Address::generate(&env);
+    let disputer = Address::generate(&env);
+    token_asset_client.mint(&asserter, &1_000);
+    token_asset_client.mint(&disputer, &1_000);
+    client.initialize(&admin, &token_id, &100, &3600, &resolvers);
+
+    // An assertion posted before the pause can still finalize normally.
+    let pending_id = client.assert_outcome(&asserter, &true);
+
+    client.set_paused(&true);
+
+    assert_eq!(
+        client.try_assert_outcome(&asserter, &true),
+        Err(Ok(Error::Paused))
+    );
+    assert_eq!(
+        client.try_dispute(&disputer, &pending_id),
+        Err(Ok(Error::Paused))
+    );
+
+    env.ledger().with_mut(|l| l.timestamp += 3601);
+    let outcome = client.finalize(&pending_id);
+    assert!(outcome);
+    assert_eq!(token.balance(&asserter), 1_000);
+
+    client.set_paused(&false);
+    let id = client.assert_outcome(&asserter, &true);
+    client.dispute(&disputer, &id);
+    assert_eq!(
+        client.try_resolve(&resolvers.get(0).unwrap(), &id, &true),
+        Ok(Ok(None))
+    );
+}
+
+#[test]
+fn test_cannot_pause_before_initialization() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register(Tholos, ());
+    let client = TholosClient::new(&env, &contract_id);
+
+    assert_eq!(client.try_set_paused(&true), Err(Ok(Error::NotInitialized)));
+}
+
+#[test]
 fn test_cannot_update_resolvers_to_even_count() {
     let env = Env::default();
     env.mock_all_auths();

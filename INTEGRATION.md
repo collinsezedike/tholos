@@ -138,5 +138,9 @@ event carries, not `get_assertion_state(id).outcome`.
   mechanism, so integrators who want to incentivize keepers to call `finalize`
   promptly need to handle that themselves (e.g. your own contract pays a small
   bounty to whoever triggers your callback).
-- No pause: if something goes wrong, there's no way to freeze in-flight assertions
-  short of `update_resolvers` locking out the compromised committee.
+- The admin can pause `assert_outcome`, `dispute`, and `resolve` at any time via
+  `set_paused`. Your integration should treat a `Paused` error as a distinct,
+  expected failure mode (surface it to the user as "resolution temporarily
+  unavailable") rather than an unexpected error. `finalize` and
+  `update_resolvers` stay callable while paused, so assertions already `Pending`
+  before a pause can still resolve uncontested.
