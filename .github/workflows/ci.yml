@@ -23,6 +23,9 @@ jobs:
       - name: Check formatting
         run: cargo fmt --check
 
+      - name: Lint shell scripts
+        run: shellcheck scripts/*.sh
+
       # demo-consumer imports tholos's compiled wasm at compile time
       # (contractimport!), so it must exist before anything below this
       # touches demo-consumer: clippy and test both compile it.
