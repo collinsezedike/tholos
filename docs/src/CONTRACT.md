@@ -36,6 +36,7 @@ State of an assertion: `Pending`, `Disputed`, or `Resolved`.
 | `disputer` | `Option<Address>` | Who disputed it, if disputed |
 | `votes_for_outcome` / `votes_against_outcome` | `u32` | Resolver vote tally |
 | `voted` | `Vec<Address>` | Resolvers who have already voted, to prevent double-voting |
+| `resolvers` | `Vec<Address>` | The resolver committee snapshotted at dispute time; empty until `dispute` is called. See `resolve` below. |
 
 ### `Error`
 
@@ -52,22 +53,27 @@ State of an assertion: `Pending`, `Disputed`, or `Resolved`.
 | `NotAResolver` | Caller isn't in the current resolver committee |
 | `AlreadyVoted` | Resolver already voted on this assertion |
 | `Paused` | Called `assert_outcome`, `dispute`, or `resolve` while paused |
+| `InvalidBondAmount` | `bond_amount` is zero or negative |
+| `InvalidChallengeWindow` | `challenge_window_secs` is zero |
 
 ## Functions
 
 ### `initialize(admin, token, bond_amount, challenge_window_secs, resolvers)`
 
 One-time setup. `resolvers` must have an odd, non-zero length so a majority vote can
-never tie. Requires `admin`'s signature. Fails with `AlreadyInitialized` if called
+never tie. `bond_amount` must be positive and `challenge_window_secs` must be
+non-zero. Requires `admin`'s signature. Fails with `AlreadyInitialized` if called
 twice.
 
 ### `update_resolvers(new_resolvers)`
 
-Replaces the resolver committee. Requires the stored admin's signature. Same
-odd-length requirement as `initialize`. Emits `ResolversUpdated`. Does not affect the
-`voted` list on in-flight assertions: a resolver removed mid-dispute simply can no
-longer cast further votes; a resolver added mid-dispute can vote on assertions that
-were already disputed before they joined.
+Replaces the resolver committee used for assertions disputed *after* this call.
+Requires the stored admin's signature. Same odd-length requirement as `initialize`.
+Emits `ResolversUpdated`. Has no effect on assertions already `Disputed`: each
+dispute snapshots the committee at the moment `dispute` is called (see the
+`resolvers` field on `Assertion`), and voting for that dispute is decided against
+that snapshot for its whole lifetime, not the live committee. A resolver removed
+after a dispute was opened can still vote on it; a resolver added after can't.
 
 ### `set_paused(paused)`
 
@@ -99,8 +105,9 @@ dispute. Returns the asserter's bond and returns the asserted outcome. Fails wit
 ### `resolve(resolver, id, agrees_with_asserter) -> Option<bool>`
 
 Casts one resolver's vote on a `Disputed` assertion. Requires `resolver`'s signature
-and that they're in the current committee. Fails with `Paused` if paused,
-`NotAResolver`, `NotDisputed`, or `AlreadyVoted` as appropriate.
+and that they're in the committee snapshotted when this assertion was disputed
+(`Assertion.resolvers`), not necessarily the live committee. Fails with `Paused` if
+paused, `NotAResolver`, `NotDisputed`, or `AlreadyVoted` as appropriate.
 
 Returns `None` if no side has reached a strict majority yet. Once a majority agrees,
 the winning side (asserter if the majority agreed with them, disputer otherwise)

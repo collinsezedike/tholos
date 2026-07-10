@@ -52,7 +52,7 @@ A bond gets posted, a window gives anyone the chance to dispute it, and if dispu
 | Contract | Rust, [Soroban SDK](https://developers.stellar.org/docs/build/smart-contracts/overview) 26 |
 | Network | Stellar (testnet today) |
 | Token | Any SEP-41 / Stellar Asset Contract token, configured per deployment |
-| CI | GitHub Actions: `cargo fmt`, `cargo clippy`, `cargo test`, wasm build |
+| CI | GitHub Actions: `cargo fmt`, `shellcheck`, `cargo clippy`, `cargo test`, wasm build |
 
 ## Project layout
 
@@ -81,6 +81,7 @@ cargo test
 
 # Check formatting and lints (same checks CI runs)
 cargo fmt --check
+shellcheck scripts/*.sh
 cargo clippy --workspace --all-targets -- -D warnings
 
 # Build the optimized, deployable contract wasm

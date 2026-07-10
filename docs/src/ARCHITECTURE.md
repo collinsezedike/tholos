@@ -20,6 +20,19 @@ callers are expected to handle that.
 committee, a strict majority (`len / 2 + 1`) is always reachable and never
 ambiguous. No tie-handling logic exists because none is needed.
 
+## Resolver committee is snapshotted per dispute
+
+`dispute` copies the current resolver committee onto the assertion
+(`Assertion.resolvers`); `resolve` checks membership and computes majority against
+that snapshot, not the live `Resolvers` value in contract storage. Earlier this
+wasn't snapshotted: `resolve` re-read the live committee on every call. That meant
+an `update_resolvers` call in the middle of an open dispute could change who was
+entitled to decide it and what majority meant, mid-vote, which is a correctness
+problem independent of whether the update was legitimate or malicious. Snapshotting
+at `dispute` time makes a dispute's rules fixed for its whole lifetime: whoever was
+on the committee when it opened decides it, regardless of what the committee looks
+like by the time it closes.
+
 ## State before external calls
 
 Every function that moves tokens (`assert_outcome`, `dispute`, `finalize`,

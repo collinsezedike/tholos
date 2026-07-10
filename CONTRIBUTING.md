@@ -106,6 +106,7 @@ build has to come first):
 
 ```sh
 cargo fmt --check
+shellcheck scripts/*.sh
 cargo build -p tholos --target wasm32v1-none --release
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test
