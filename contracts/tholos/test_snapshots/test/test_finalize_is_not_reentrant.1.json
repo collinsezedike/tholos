@@ -211,6 +211,14 @@
                   },
                   {
                     "key": {
+                      "symbol": "resolvers"
+                    },
+                    "val": {
+                      "vec": []
+                    }
+                  },
+                  {
+                    "key": {
                       "symbol": "status"
                     },
                     "val": {

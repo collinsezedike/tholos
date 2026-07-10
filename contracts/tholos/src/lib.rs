@@ -63,6 +63,12 @@ pub struct Assertion {
     pub votes_for_outcome: u32,
     pub votes_against_outcome: u32,
     pub voted: Vec<Address>,
+    /// The resolver committee at the moment this assertion was disputed.
+    /// Empty until `dispute` is called. Voting and majority are always
+    /// computed against this snapshot, not the live committee, so an
+    /// `update_resolvers` call mid-dispute can't change who gets to decide
+    /// an already-disputed assertion.
+    pub resolvers: Vec<Address>,
 }
 
 #[contracttype]
@@ -91,6 +97,8 @@ pub enum Error {
     NotAResolver = 9,
     AlreadyVoted = 10,
     Paused = 11,
+    InvalidBondAmount = 12,
+    InvalidChallengeWindow = 13,
 }
 
 const DAY_IN_LEDGERS: u32 = 17280;
@@ -117,6 +125,12 @@ impl Tholos {
         }
         if resolvers.is_empty() || resolvers.len().is_multiple_of(2) {
             return Err(Error::InvalidResolverCount);
+        }
+        if bond_amount <= 0 {
+            return Err(Error::InvalidBondAmount);
+        }
+        if challenge_window_secs == 0 {
+            return Err(Error::InvalidChallengeWindow);
         }
 
         admin.require_auth();
@@ -203,7 +217,7 @@ impl Tholos {
         Self::require_not_paused(&env)?;
         asserter.require_auth();
 
-        let bond_amount: i128 = Self::get(&env, &DataKey::BondAmount);
+        let bond_amount: i128 = Self::get(&env, &DataKey::BondAmount)?;
 
         // The new id is reserved and the assertion written before the
         // external token transfer below, so a reentrant call during the
@@ -220,12 +234,13 @@ impl Tholos {
             votes_for_outcome: 0,
             votes_against_outcome: 0,
             voted: Vec::new(&env),
+            resolvers: Vec::new(&env),
         };
         env.storage()
             .persistent()
             .set(&DataKey::Assertion(id), &assertion);
 
-        let token_id: Address = Self::get(&env, &DataKey::Token);
+        let token_id: Address = Self::get(&env, &DataKey::Token)?;
         token::Client::new(&env, &token_id).transfer(
             &asserter,
             env.current_contract_address(),
@@ -252,10 +267,16 @@ impl Tholos {
             return Err(Error::NotPending);
         }
 
-        let window: u64 = Self::get(&env, &DataKey::ChallengeWindow);
+        let window: u64 = Self::get(&env, &DataKey::ChallengeWindow)?;
         if env.ledger().timestamp() > assertion.opened_at + window {
             return Err(Error::ChallengeWindowClosed);
         }
+
+        // Snapshot the current resolver committee onto the assertion: voting
+        // and majority for this dispute are decided against this snapshot
+        // for its whole lifetime, not the live committee, so a later
+        // `update_resolvers` can't change who gets to decide it.
+        assertion.resolvers = Self::get(&env, &DataKey::Resolvers)?;
 
         // State is written before the external token transfer below so that
         // a reentrant call from a non-standard token sees this assertion as
@@ -266,7 +287,7 @@ impl Tholos {
             .persistent()
             .set(&DataKey::Assertion(id), &assertion);
 
-        let token_id: Address = Self::get(&env, &DataKey::Token);
+        let token_id: Address = Self::get(&env, &DataKey::Token)?;
         token::Client::new(&env, &token_id).transfer(
             &disputer,
             env.current_contract_address(),
@@ -286,7 +307,7 @@ impl Tholos {
             return Err(Error::NotPending);
         }
 
-        let window: u64 = Self::get(&env, &DataKey::ChallengeWindow);
+        let window: u64 = Self::get(&env, &DataKey::ChallengeWindow)?;
         if env.ledger().timestamp() <= assertion.opened_at + window {
             return Err(Error::ChallengeWindowOpen);
         }
@@ -299,7 +320,7 @@ impl Tholos {
             .persistent()
             .set(&DataKey::Assertion(id), &assertion);
 
-        let token_id: Address = Self::get(&env, &DataKey::Token);
+        let token_id: Address = Self::get(&env, &DataKey::Token)?;
         token::Client::new(&env, &token_id).transfer(
             &env.current_contract_address(),
             &assertion.asserter,
@@ -328,14 +349,14 @@ impl Tholos {
         Self::require_not_paused(&env)?;
         resolver.require_auth();
 
-        let resolvers: Vec<Address> = Self::get(&env, &DataKey::Resolvers);
-        if !resolvers.contains(&resolver) {
-            return Err(Error::NotAResolver);
-        }
-
         let mut assertion = Self::get_assertion(&env, id)?;
         if assertion.status != Status::Disputed {
             return Err(Error::NotDisputed);
+        }
+        // Membership and majority are decided against the committee snapshot
+        // taken when this assertion was disputed, not the live committee.
+        if !assertion.resolvers.contains(&resolver) {
+            return Err(Error::NotAResolver);
         }
         if assertion.voted.contains(&resolver) {
             return Err(Error::AlreadyVoted);
@@ -348,7 +369,7 @@ impl Tholos {
             assertion.votes_against_outcome += 1;
         }
 
-        let majority = (resolvers.len() / 2) + 1;
+        let majority = (assertion.resolvers.len() / 2) + 1;
         let winner_is_asserter = if assertion.votes_for_outcome >= majority {
             Some(true)
         } else if assertion.votes_against_outcome >= majority {
@@ -385,7 +406,7 @@ impl Tholos {
             .persistent()
             .set(&DataKey::Assertion(id), &assertion);
 
-        let token_id: Address = Self::get(&env, &DataKey::Token);
+        let token_id: Address = Self::get(&env, &DataKey::Token)?;
         token::Client::new(&env, &token_id).transfer(
             &env.current_contract_address(),
             &winner,
@@ -411,8 +432,14 @@ impl Tholos {
             .ok_or(Error::AssertionNotFound)
     }
 
-    fn get<T: soroban_sdk::TryFromVal<Env, soroban_sdk::Val>>(env: &Env, key: &DataKey) -> T {
-        env.storage().instance().get(key).unwrap()
+    fn get<T: soroban_sdk::TryFromVal<Env, soroban_sdk::Val>>(
+        env: &Env,
+        key: &DataKey,
+    ) -> Result<T, Error> {
+        env.storage()
+            .instance()
+            .get(key)
+            .ok_or(Error::NotInitialized)
     }
 }
 

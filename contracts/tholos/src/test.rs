@@ -3,13 +3,18 @@
 use super::*;
 use soroban_sdk::testutils::{Address as _, Ledger};
 
-fn setup(env: &Env) -> (Address, Address, token::Client<'static>, Vec<Address>) {
-    let admin = Address::generate(env);
-    let token_admin = Address::generate(env);
-    let token_contract = env.register_stellar_asset_contract_v2(token_admin.clone());
-    let token = token::Client::new(env, &token_contract.address());
-    let token_asset_client = token::StellarAssetClient::new(env, &token_contract.address());
+const DEFAULT_BOND: i128 = 100;
+const DEFAULT_WINDOW: u64 = 3600;
+const DEFAULT_MINT: i128 = 1_000;
 
+/// A registered but uninitialized token and resolver committee, for the
+/// handful of tests that need to call `initialize` themselves (to test bad
+/// init parameters, or that it can't be called twice).
+fn setup(env: &Env) -> (Address, Vec<Address>) {
+    let token_admin = Address::generate(env);
+    let token_id = env
+        .register_stellar_asset_contract_v2(token_admin)
+        .address();
     let resolvers = Vec::from_array(
         env,
         [
@@ -18,68 +23,103 @@ fn setup(env: &Env) -> (Address, Address, token::Client<'static>, Vec<Address>) 
             Address::generate(env),
         ],
     );
+    (token_id, resolvers)
+}
 
-    let _ = admin;
-    let _ = token_asset_client;
-    (token_admin, token_contract.address(), token, resolvers)
+/// A ready-to-use, already-initialized Tholos instance with a 3-member
+/// resolver committee and its backing token (bond 100, window 3600), used by
+/// most tests. Tests that need an *uninitialized* contract, or non-default
+/// init parameters, use `setup` directly instead.
+struct Fixture {
+    env: Env,
+    client: TholosClient<'static>,
+    token: token::Client<'static>,
+    token_id: Address,
+    resolvers: Vec<Address>,
+}
+
+impl Fixture {
+    fn new() -> Self {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let (token_id, resolvers) = setup(&env);
+        let token = token::Client::new(&env, &token_id);
+
+        let contract_id = env.register(Tholos, ());
+        let client = TholosClient::new(&env, &contract_id);
+
+        let admin = Address::generate(&env);
+        client.initialize(
+            &admin,
+            &token_id,
+            &DEFAULT_BOND,
+            &DEFAULT_WINDOW,
+            &resolvers,
+        );
+
+        Fixture {
+            env,
+            client,
+            token,
+            token_id,
+            resolvers,
+        }
+    }
+
+    fn generate(&self) -> Address {
+        Address::generate(&self.env)
+    }
+
+    /// Generates a fresh address and mints it the default test balance.
+    fn funded_address(&self) -> Address {
+        let addr = self.generate();
+        self.mint(&addr, DEFAULT_MINT);
+        addr
+    }
+
+    fn mint(&self, addr: &Address, amount: i128) {
+        token::StellarAssetClient::new(&self.env, &self.token_id).mint(addr, &amount);
+    }
+
+    fn advance_past_window(&self) {
+        self.env
+            .ledger()
+            .with_mut(|l| l.timestamp += DEFAULT_WINDOW + 1);
+    }
 }
 
 #[test]
 fn test_uncontested_assertion_finalizes() {
-    let env = Env::default();
-    env.mock_all_auths();
+    let f = Fixture::new();
+    let asserter = f.funded_address();
 
-    let (_token_admin, token_id, token, resolvers) = setup(&env);
-    let token_asset_client = token::StellarAssetClient::new(&env, &token_id);
+    let id = f.client.assert_outcome(&asserter, &true);
+    assert_eq!(f.token.balance(&asserter), 900);
 
-    let contract_id = env.register(Tholos, ());
-    let client = TholosClient::new(&env, &contract_id);
+    f.advance_past_window();
 
-    let admin = Address::generate(&env);
-    let asserter = Address::generate(&env);
-    token_asset_client.mint(&asserter, &1_000);
-
-    client.initialize(&admin, &token_id, &100, &3600, &resolvers);
-
-    let id = client.assert_outcome(&asserter, &true);
-    assert_eq!(token.balance(&asserter), 900);
-
-    env.ledger().with_mut(|l| l.timestamp += 3601);
-
-    let outcome = client.finalize(&id);
+    let outcome = f.client.finalize(&id);
     assert!(outcome);
-    assert_eq!(token.balance(&asserter), 1_000);
+    assert_eq!(f.token.balance(&asserter), 1_000);
 }
 
 #[test]
 fn test_disputed_assertion_pays_winner() {
-    let env = Env::default();
-    env.mock_all_auths();
+    let f = Fixture::new();
+    let asserter = f.funded_address();
+    let disputer = f.funded_address();
 
-    let (_token_admin, token_id, token, resolvers) = setup(&env);
-    let token_asset_client = token::StellarAssetClient::new(&env, &token_id);
+    let id = f.client.assert_outcome(&asserter, &true);
+    f.client.dispute(&disputer, &id);
+    assert_eq!(f.token.balance(&asserter), 900);
+    assert_eq!(f.token.balance(&disputer), 900);
 
-    let contract_id = env.register(Tholos, ());
-    let client = TholosClient::new(&env, &contract_id);
+    f.client.resolve(&f.resolvers.get(0).unwrap(), &id, &false);
+    f.client.resolve(&f.resolvers.get(1).unwrap(), &id, &false);
 
-    let admin = Address::generate(&env);
-    let asserter = Address::generate(&env);
-    let disputer = Address::generate(&env);
-    token_asset_client.mint(&asserter, &1_000);
-    token_asset_client.mint(&disputer, &1_000);
-
-    client.initialize(&admin, &token_id, &100, &3600, &resolvers);
-
-    let id = client.assert_outcome(&asserter, &true);
-    client.dispute(&disputer, &id);
-    assert_eq!(token.balance(&asserter), 900);
-    assert_eq!(token.balance(&disputer), 900);
-
-    client.resolve(&resolvers.get(0).unwrap(), &id, &false);
-    client.resolve(&resolvers.get(1).unwrap(), &id, &false);
-
-    assert_eq!(token.balance(&disputer), 1_100);
-    assert_eq!(token.balance(&asserter), 900);
+    assert_eq!(f.token.balance(&disputer), 1_100);
+    assert_eq!(f.token.balance(&asserter), 900);
 }
 
 #[test]
@@ -87,283 +127,261 @@ fn test_cannot_initialize_with_even_resolver_count() {
     let env = Env::default();
     env.mock_all_auths();
 
-    let (_token_admin, token_id, _token, _resolvers) = setup(&env);
+    let (token_id, _resolvers) = setup(&env);
     let contract_id = env.register(Tholos, ());
     let client = TholosClient::new(&env, &contract_id);
 
     let admin = Address::generate(&env);
     let even_resolvers = Vec::from_array(&env, [Address::generate(&env), Address::generate(&env)]);
 
-    let result = client.try_initialize(&admin, &token_id, &100, &3600, &even_resolvers);
+    let result = client.try_initialize(
+        &admin,
+        &token_id,
+        &DEFAULT_BOND,
+        &DEFAULT_WINDOW,
+        &even_resolvers,
+    );
     assert!(result.is_err());
 }
 
 #[test]
-fn test_cannot_initialize_twice() {
+fn test_cannot_initialize_with_zero_bond_amount() {
     let env = Env::default();
     env.mock_all_auths();
 
-    let (_token_admin, token_id, _token, resolvers) = setup(&env);
+    let (token_id, resolvers) = setup(&env);
     let contract_id = env.register(Tholos, ());
     let client = TholosClient::new(&env, &contract_id);
 
     let admin = Address::generate(&env);
-    client.initialize(&admin, &token_id, &100, &3600, &resolvers);
+    let result = client.try_initialize(&admin, &token_id, &0, &DEFAULT_WINDOW, &resolvers);
+    assert_eq!(result, Err(Ok(Error::InvalidBondAmount)));
+}
 
-    let result = client.try_initialize(&admin, &token_id, &100, &3600, &resolvers);
+#[test]
+fn test_cannot_initialize_with_negative_bond_amount() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (token_id, resolvers) = setup(&env);
+    let contract_id = env.register(Tholos, ());
+    let client = TholosClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let result = client.try_initialize(&admin, &token_id, &-1, &DEFAULT_WINDOW, &resolvers);
+    assert_eq!(result, Err(Ok(Error::InvalidBondAmount)));
+}
+
+#[test]
+fn test_cannot_initialize_with_zero_challenge_window() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (token_id, resolvers) = setup(&env);
+    let contract_id = env.register(Tholos, ());
+    let client = TholosClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let result = client.try_initialize(&admin, &token_id, &DEFAULT_BOND, &0, &resolvers);
+    assert_eq!(result, Err(Ok(Error::InvalidChallengeWindow)));
+}
+
+#[test]
+fn test_cannot_initialize_twice() {
+    let f = Fixture::new();
+
+    let admin = f.generate();
+    let result = f.client.try_initialize(
+        &admin,
+        &f.token_id,
+        &DEFAULT_BOND,
+        &DEFAULT_WINDOW,
+        &f.resolvers,
+    );
     assert_eq!(result, Err(Ok(Error::AlreadyInitialized)));
 }
 
 #[test]
 fn test_cannot_finalize_before_window_closes() {
-    let env = Env::default();
-    env.mock_all_auths();
+    let f = Fixture::new();
+    let asserter = f.funded_address();
 
-    let (_token_admin, token_id, _token, resolvers) = setup(&env);
-    let token_asset_client = token::StellarAssetClient::new(&env, &token_id);
-    let contract_id = env.register(Tholos, ());
-    let client = TholosClient::new(&env, &contract_id);
+    let id = f.client.assert_outcome(&asserter, &true);
 
-    let admin = Address::generate(&env);
-    let asserter = Address::generate(&env);
-    token_asset_client.mint(&asserter, &1_000);
-    client.initialize(&admin, &token_id, &100, &3600, &resolvers);
-
-    let id = client.assert_outcome(&asserter, &true);
-
-    let result = client.try_finalize(&id);
+    let result = f.client.try_finalize(&id);
     assert_eq!(result, Err(Ok(Error::ChallengeWindowOpen)));
 }
 
 #[test]
 fn test_cannot_dispute_after_window_closes() {
-    let env = Env::default();
-    env.mock_all_auths();
+    let f = Fixture::new();
+    let asserter = f.funded_address();
+    let disputer = f.funded_address();
 
-    let (_token_admin, token_id, _token, resolvers) = setup(&env);
-    let token_asset_client = token::StellarAssetClient::new(&env, &token_id);
-    let contract_id = env.register(Tholos, ());
-    let client = TholosClient::new(&env, &contract_id);
+    let id = f.client.assert_outcome(&asserter, &true);
+    f.advance_past_window();
 
-    let admin = Address::generate(&env);
-    let asserter = Address::generate(&env);
-    let disputer = Address::generate(&env);
-    token_asset_client.mint(&asserter, &1_000);
-    token_asset_client.mint(&disputer, &1_000);
-    client.initialize(&admin, &token_id, &100, &3600, &resolvers);
-
-    let id = client.assert_outcome(&asserter, &true);
-    env.ledger().with_mut(|l| l.timestamp += 3601);
-
-    let result = client.try_dispute(&disputer, &id);
+    let result = f.client.try_dispute(&disputer, &id);
     assert_eq!(result, Err(Ok(Error::ChallengeWindowClosed)));
 }
 
 #[test]
 fn test_cannot_dispute_an_already_disputed_assertion() {
-    let env = Env::default();
-    env.mock_all_auths();
+    let f = Fixture::new();
+    let asserter = f.funded_address();
+    let disputer = f.funded_address();
+    let second_disputer = f.funded_address();
 
-    let (_token_admin, token_id, _token, resolvers) = setup(&env);
-    let token_asset_client = token::StellarAssetClient::new(&env, &token_id);
-    let contract_id = env.register(Tholos, ());
-    let client = TholosClient::new(&env, &contract_id);
+    let id = f.client.assert_outcome(&asserter, &true);
+    f.client.dispute(&disputer, &id);
 
-    let admin = Address::generate(&env);
-    let asserter = Address::generate(&env);
-    let disputer = Address::generate(&env);
-    let second_disputer = Address::generate(&env);
-    token_asset_client.mint(&asserter, &1_000);
-    token_asset_client.mint(&disputer, &1_000);
-    token_asset_client.mint(&second_disputer, &1_000);
-    client.initialize(&admin, &token_id, &100, &3600, &resolvers);
-
-    let id = client.assert_outcome(&asserter, &true);
-    client.dispute(&disputer, &id);
-
-    let result = client.try_dispute(&second_disputer, &id);
+    let result = f.client.try_dispute(&second_disputer, &id);
     assert_eq!(result, Err(Ok(Error::NotPending)));
 }
 
 #[test]
 fn test_non_resolver_cannot_vote() {
-    let env = Env::default();
-    env.mock_all_auths();
+    let f = Fixture::new();
+    let asserter = f.funded_address();
+    let disputer = f.funded_address();
+    let outsider = f.generate();
 
-    let (_token_admin, token_id, _token, resolvers) = setup(&env);
-    let token_asset_client = token::StellarAssetClient::new(&env, &token_id);
-    let contract_id = env.register(Tholos, ());
-    let client = TholosClient::new(&env, &contract_id);
+    let id = f.client.assert_outcome(&asserter, &true);
+    f.client.dispute(&disputer, &id);
 
-    let admin = Address::generate(&env);
-    let asserter = Address::generate(&env);
-    let disputer = Address::generate(&env);
-    let outsider = Address::generate(&env);
-    token_asset_client.mint(&asserter, &1_000);
-    token_asset_client.mint(&disputer, &1_000);
-    client.initialize(&admin, &token_id, &100, &3600, &resolvers);
-
-    let id = client.assert_outcome(&asserter, &true);
-    client.dispute(&disputer, &id);
-
-    let result = client.try_resolve(&outsider, &id, &true);
+    let result = f.client.try_resolve(&outsider, &id, &true);
     assert_eq!(result, Err(Ok(Error::NotAResolver)));
 }
 
 #[test]
 fn test_resolver_cannot_vote_twice() {
-    let env = Env::default();
-    env.mock_all_auths();
+    let f = Fixture::new();
+    let asserter = f.funded_address();
+    let disputer = f.funded_address();
 
-    let (_token_admin, token_id, _token, resolvers) = setup(&env);
-    let token_asset_client = token::StellarAssetClient::new(&env, &token_id);
-    let contract_id = env.register(Tholos, ());
-    let client = TholosClient::new(&env, &contract_id);
+    let id = f.client.assert_outcome(&asserter, &true);
+    f.client.dispute(&disputer, &id);
 
-    let admin = Address::generate(&env);
-    let asserter = Address::generate(&env);
-    let disputer = Address::generate(&env);
-    token_asset_client.mint(&asserter, &1_000);
-    token_asset_client.mint(&disputer, &1_000);
-    client.initialize(&admin, &token_id, &100, &3600, &resolvers);
+    let resolver = f.resolvers.get(0).unwrap();
+    f.client.resolve(&resolver, &id, &true);
 
-    let id = client.assert_outcome(&asserter, &true);
-    client.dispute(&disputer, &id);
-
-    let resolver = resolvers.get(0).unwrap();
-    client.resolve(&resolver, &id, &true);
-
-    let result = client.try_resolve(&resolver, &id, &true);
+    let result = f.client.try_resolve(&resolver, &id, &true);
     assert_eq!(result, Err(Ok(Error::AlreadyVoted)));
 }
 
 #[test]
 fn test_cannot_resolve_a_non_disputed_assertion() {
-    let env = Env::default();
-    env.mock_all_auths();
+    let f = Fixture::new();
+    let asserter = f.funded_address();
 
-    let (_token_admin, token_id, _token, resolvers) = setup(&env);
-    let token_asset_client = token::StellarAssetClient::new(&env, &token_id);
-    let contract_id = env.register(Tholos, ());
-    let client = TholosClient::new(&env, &contract_id);
+    let id = f.client.assert_outcome(&asserter, &true);
 
-    let admin = Address::generate(&env);
-    let asserter = Address::generate(&env);
-    token_asset_client.mint(&asserter, &1_000);
-    client.initialize(&admin, &token_id, &100, &3600, &resolvers);
-
-    let id = client.assert_outcome(&asserter, &true);
-
-    let result = client.try_resolve(&resolvers.get(0).unwrap(), &id, &true);
+    let result = f
+        .client
+        .try_resolve(&f.resolvers.get(0).unwrap(), &id, &true);
     assert_eq!(result, Err(Ok(Error::NotDisputed)));
 }
 
 #[test]
 fn test_split_resolver_vote_does_not_finalize() {
-    let env = Env::default();
-    env.mock_all_auths();
+    let f = Fixture::new();
+    let asserter = f.funded_address();
+    let disputer = f.funded_address();
 
-    let (_token_admin, token_id, token, resolvers) = setup(&env);
-    let token_asset_client = token::StellarAssetClient::new(&env, &token_id);
-    let contract_id = env.register(Tholos, ());
-    let client = TholosClient::new(&env, &contract_id);
+    let id = f.client.assert_outcome(&asserter, &true);
+    f.client.dispute(&disputer, &id);
 
-    let admin = Address::generate(&env);
-    let asserter = Address::generate(&env);
-    let disputer = Address::generate(&env);
-    token_asset_client.mint(&asserter, &1_000);
-    token_asset_client.mint(&disputer, &1_000);
-    client.initialize(&admin, &token_id, &100, &3600, &resolvers);
-
-    let id = client.assert_outcome(&asserter, &true);
-    client.dispute(&disputer, &id);
-
-    let outcome = client.resolve(&resolvers.get(0).unwrap(), &id, &true);
+    let outcome = f.client.resolve(&f.resolvers.get(0).unwrap(), &id, &true);
     assert_eq!(outcome, None);
-    assert_eq!(token.balance(&asserter), 900);
-    assert_eq!(token.balance(&disputer), 900);
+    assert_eq!(f.token.balance(&asserter), 900);
+    assert_eq!(f.token.balance(&disputer), 900);
 }
 
 #[test]
 fn test_admin_can_update_resolvers() {
-    let env = Env::default();
-    env.mock_all_auths();
+    let f = Fixture::new();
+    let asserter = f.funded_address();
+    let disputer = f.funded_address();
 
-    let (_token_admin, token_id, token, resolvers) = setup(&env);
-    let token_asset_client = token::StellarAssetClient::new(&env, &token_id);
-    let contract_id = env.register(Tholos, ());
-    let client = TholosClient::new(&env, &contract_id);
-
-    let admin = Address::generate(&env);
-    let asserter = Address::generate(&env);
-    let disputer = Address::generate(&env);
-    token_asset_client.mint(&asserter, &1_000);
-    token_asset_client.mint(&disputer, &1_000);
-    client.initialize(&admin, &token_id, &100, &3600, &resolvers);
-
-    let new_resolvers = Vec::from_array(
-        &env,
-        [
-            Address::generate(&env),
-            Address::generate(&env),
-            Address::generate(&env),
-        ],
-    );
-    client.update_resolvers(&new_resolvers);
+    let new_resolvers = Vec::from_array(&f.env, [f.generate(), f.generate(), f.generate()]);
+    f.client.update_resolvers(&new_resolvers);
 
     // The old committee can no longer vote.
-    let id = client.assert_outcome(&asserter, &true);
-    client.dispute(&disputer, &id);
-    let result = client.try_resolve(&resolvers.get(0).unwrap(), &id, &true);
+    let id = f.client.assert_outcome(&asserter, &true);
+    f.client.dispute(&disputer, &id);
+    let result = f
+        .client
+        .try_resolve(&f.resolvers.get(0).unwrap(), &id, &true);
     assert_eq!(result, Err(Ok(Error::NotAResolver)));
 
     // The new committee can.
-    client.resolve(&new_resolvers.get(0).unwrap(), &id, &false);
-    client.resolve(&new_resolvers.get(1).unwrap(), &id, &false);
-    assert_eq!(token.balance(&disputer), 1_100);
+    f.client
+        .resolve(&new_resolvers.get(0).unwrap(), &id, &false);
+    f.client
+        .resolve(&new_resolvers.get(1).unwrap(), &id, &false);
+    assert_eq!(f.token.balance(&disputer), 1_100);
+}
+
+#[test]
+fn test_resolvers_updated_mid_dispute_do_not_affect_it() {
+    let f = Fixture::new();
+    let asserter = f.funded_address();
+    let disputer = f.funded_address();
+
+    // The dispute is opened, snapshotting the original committee, before the
+    // committee changes.
+    let id = f.client.assert_outcome(&asserter, &true);
+    f.client.dispute(&disputer, &id);
+
+    let new_resolvers = Vec::from_array(&f.env, [f.generate(), f.generate(), f.generate()]);
+    f.client.update_resolvers(&new_resolvers);
+
+    // A member of the new (current) committee cannot vote on this dispute:
+    // it was snapshotted to the old committee before they joined.
+    assert_eq!(
+        f.client
+            .try_resolve(&new_resolvers.get(0).unwrap(), &id, &true),
+        Err(Ok(Error::NotAResolver))
+    );
+
+    // The original committee, though no longer the live committee, can
+    // still decide this dispute, since it was snapshotted at dispute time.
+    f.client.resolve(&f.resolvers.get(0).unwrap(), &id, &false);
+    f.client.resolve(&f.resolvers.get(1).unwrap(), &id, &false);
+    assert_eq!(f.token.balance(&disputer), 1_100);
 }
 
 #[test]
 fn test_paused_blocks_assert_dispute_and_resolve_but_not_finalize() {
-    let env = Env::default();
-    env.mock_all_auths();
-
-    let (_token_admin, token_id, token, resolvers) = setup(&env);
-    let token_asset_client = token::StellarAssetClient::new(&env, &token_id);
-    let contract_id = env.register(Tholos, ());
-    let client = TholosClient::new(&env, &contract_id);
-
-    let admin = Address::generate(&env);
-    let asserter = Address::generate(&env);
-    let disputer = Address::generate(&env);
-    token_asset_client.mint(&asserter, &1_000);
-    token_asset_client.mint(&disputer, &1_000);
-    client.initialize(&admin, &token_id, &100, &3600, &resolvers);
+    let f = Fixture::new();
+    let asserter = f.funded_address();
+    let disputer = f.funded_address();
 
     // An assertion posted before the pause can still finalize normally.
-    let pending_id = client.assert_outcome(&asserter, &true);
+    let pending_id = f.client.assert_outcome(&asserter, &true);
 
-    client.set_paused(&true);
+    f.client.set_paused(&true);
 
     assert_eq!(
-        client.try_assert_outcome(&asserter, &true),
+        f.client.try_assert_outcome(&asserter, &true),
         Err(Ok(Error::Paused))
     );
     assert_eq!(
-        client.try_dispute(&disputer, &pending_id),
+        f.client.try_dispute(&disputer, &pending_id),
         Err(Ok(Error::Paused))
     );
 
-    env.ledger().with_mut(|l| l.timestamp += 3601);
-    let outcome = client.finalize(&pending_id);
+    f.advance_past_window();
+    let outcome = f.client.finalize(&pending_id);
     assert!(outcome);
-    assert_eq!(token.balance(&asserter), 1_000);
+    assert_eq!(f.token.balance(&asserter), 1_000);
 
-    client.set_paused(&false);
-    let id = client.assert_outcome(&asserter, &true);
-    client.dispute(&disputer, &id);
+    f.client.set_paused(&false);
+    let id = f.client.assert_outcome(&asserter, &true);
+    f.client.dispute(&disputer, &id);
     assert_eq!(
-        client.try_resolve(&resolvers.get(0).unwrap(), &id, &true),
+        f.client
+            .try_resolve(&f.resolvers.get(0).unwrap(), &id, &true),
         Ok(Ok(None))
     );
 }
@@ -381,18 +399,10 @@ fn test_cannot_pause_before_initialization() {
 
 #[test]
 fn test_cannot_update_resolvers_to_even_count() {
-    let env = Env::default();
-    env.mock_all_auths();
+    let f = Fixture::new();
 
-    let (_token_admin, token_id, _token, resolvers) = setup(&env);
-    let contract_id = env.register(Tholos, ());
-    let client = TholosClient::new(&env, &contract_id);
-
-    let admin = Address::generate(&env);
-    client.initialize(&admin, &token_id, &100, &3600, &resolvers);
-
-    let even_resolvers = Vec::from_array(&env, [Address::generate(&env), Address::generate(&env)]);
-    let result = client.try_update_resolvers(&even_resolvers);
+    let even_resolvers = Vec::from_array(&f.env, [f.generate(), f.generate()]);
+    let result = f.client.try_update_resolvers(&even_resolvers);
     assert_eq!(result, Err(Ok(Error::InvalidResolverCount)));
 }
 
@@ -418,28 +428,24 @@ fn test_cannot_update_resolvers_before_initialization() {
 
 #[test]
 fn test_operations_on_unknown_assertion_fail() {
-    let env = Env::default();
-    env.mock_all_auths();
-
-    let (_token_admin, token_id, _token, resolvers) = setup(&env);
-    let contract_id = env.register(Tholos, ());
-    let client = TholosClient::new(&env, &contract_id);
-
-    let admin = Address::generate(&env);
-    let disputer = Address::generate(&env);
-    client.initialize(&admin, &token_id, &100, &3600, &resolvers);
+    let f = Fixture::new();
+    let disputer = f.generate();
 
     assert_eq!(
-        client.try_dispute(&disputer, &42),
-        Err(Ok(Error::AssertionNotFound))
-    );
-    assert_eq!(client.try_finalize(&42), Err(Ok(Error::AssertionNotFound)));
-    assert_eq!(
-        client.try_resolve(&resolvers.get(0).unwrap(), &42, &true),
+        f.client.try_dispute(&disputer, &42),
         Err(Ok(Error::AssertionNotFound))
     );
     assert_eq!(
-        client.try_get_assertion_state(&42),
+        f.client.try_finalize(&42),
+        Err(Ok(Error::AssertionNotFound))
+    );
+    assert_eq!(
+        f.client
+            .try_resolve(&f.resolvers.get(0).unwrap(), &42, &true),
+        Err(Ok(Error::AssertionNotFound))
+    );
+    assert_eq!(
+        f.client.try_get_assertion_state(&42),
         Err(Ok(Error::AssertionNotFound))
     );
 }
@@ -545,14 +551,20 @@ fn test_finalize_is_not_reentrant() {
     let admin = Address::generate(&env);
     let asserter = Address::generate(&env);
     evil_token.credit(&asserter, &1_000);
-    client.initialize(&admin, &evil_token_id, &100, &3600, &resolvers);
+    client.initialize(
+        &admin,
+        &evil_token_id,
+        &DEFAULT_BOND,
+        &DEFAULT_WINDOW,
+        &resolvers,
+    );
 
     // The reentrancy trap isn't armed yet, so this assert_outcome call's own
     // transfer doesn't try to reenter anything.
     let id = client.assert_outcome(&asserter, &true);
     assert_eq!(evil_token.balance(&asserter), 900);
 
-    env.ledger().with_mut(|l| l.timestamp += 3601);
+    env.ledger().with_mut(|l| l.timestamp += DEFAULT_WINDOW + 1);
 
     // Arm the trap: EvilToken.transfer will now try to reenter finalize(id)
     // on itself, before finalize's own transfer call even returns.
