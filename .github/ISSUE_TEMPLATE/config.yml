@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Documentation
+    url: https://drydocs.github.io/tholos/
+    about: Read the contract reference, architecture notes, and integration guide before filing.
+  - name: Security vulnerability
+    url: https://github.com/drydocs/tholos/security/advisories/new
+    about: Do not open a public issue for a security vulnerability. Report it privately here instead.

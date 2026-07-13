@@ -99,6 +99,21 @@ whether GitHub treats it specially:
 
 Preview locally with `mdbook serve docs` (requires `cargo install mdbook`).
 
+## Opening issues
+
+Use one of the two issue templates. Blank issues are disabled.
+
+Every issue title uses the bracket prefix format `[Type] Short imperative
+description`:
+
+| Prefix | When to use |
+| --- | --- |
+| `[Bug]` | Something in a contract, script, or CI is broken or behaving incorrectly. Use the Bug Report template. |
+| `[Feature]` | A new capability, a test, a docs task, or a chore. Use the Feature Request template for all of these. |
+
+If you think you've found a security vulnerability rather than a functional bug,
+don't open an issue at all; see [SECURITY.md](SECURITY.md) instead.
+
 ## Before opening a PR
 
 Run the same checks CI runs, in this order (see the note above on why the wasm
