@@ -56,11 +56,13 @@ window. Because Soroban cross-contract calls are synchronous, a non-standard or
 malicious token could call back into Tholos mid-transfer and see stale state (an
 assertion still `Pending` when it was actually already being finalized),
 allowing a second payout drawn from bonds belonging to unrelated assertions in
-the same pooled contract balance. The fix, and a regression test that exercises
-it directly against a token built to attempt exactly that reentrant call, are in
-`contracts/tholos/src/lib.rs` and `contracts/tholos/src/test.rs::test_finalize_is_not_reentrant`.
-See the "Security notes" section of [CONTRACT.md](CONTRACT.md) for the interface-level
-summary.
+the same pooled contract balance. The fix is in `contracts/tholos/src/lib.rs`, with
+a `test_*_is_not_reentrant` regression test per function in
+`contracts/tholos/src/test.rs`, each built against a token that attempts exactly
+that reentrant call. See the "Security notes" section of [CONTRACT.md](CONTRACT.md)
+for the interface-level summary, including why `finalize` is the only one of the
+four actually reachable by a hostile token acting alone: the other three require a
+signature Soroban's auth model won't let a reentrant call forge on its own.
 
 ## Pause is scoped, not absolute
 

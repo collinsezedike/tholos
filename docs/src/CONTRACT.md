@@ -127,8 +127,16 @@ deliberately: cross-contract calls in Soroban are synchronous, so a non-standard
 or malicious `token` contract could otherwise call back into Tholos mid-transfer
 and observe stale state (e.g. an assertion still `Pending` when it's actually
 already being finalized), enabling a double payout drawn from the pooled bonds of
-unrelated assertions. `contracts/tholos/src/test.rs::test_finalize_is_not_reentrant`
-exercises this directly against a token that attempts exactly that reentrant call.
+unrelated assertions. All four functions have a regression test in
+`contracts/tholos/src/test.rs` (`test_*_is_not_reentrant`) that exercises this
+directly against a token built to attempt exactly that reentrant call.
+
+Of the four, only `finalize` requires no signature (`require_auth`). For the other
+three, Soroban's own auth model independently rejects a reentrant token's
+dynamically-triggered nested `require_auth` call, so a hostile token acting alone
+cannot actually reach the reentrant call in the first place; the state-before-transfer
+ordering is a second layer of defense for those three, in case a colluding,
+pre-authorized signer ever found a way through the first.
 
 ### Persistent storage TTL
 
