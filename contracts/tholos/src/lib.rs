@@ -105,6 +105,15 @@ const DAY_IN_LEDGERS: u32 = 17280;
 const INSTANCE_BUMP_AMOUNT: u32 = 30 * DAY_IN_LEDGERS;
 const INSTANCE_LIFETIME_THRESHOLD: u32 = INSTANCE_BUMP_AMOUNT - DAY_IN_LEDGERS;
 
+/// Persistent `Assertion` entries get the same 30-day TTL bump as instance
+/// storage, applied every time an assertion is written. A `challenge_window_secs`
+/// of at most `MAX_CHALLENGE_WINDOW_SECS` (7 days) leaves comfortable headroom
+/// within that 30-day bump for the window to elapse and for `finalize`,
+/// `dispute`, or a resolver's `resolve` to actually be called afterward.
+const ASSERTION_BUMP_AMOUNT: u32 = 30 * DAY_IN_LEDGERS;
+const ASSERTION_LIFETIME_THRESHOLD: u32 = ASSERTION_BUMP_AMOUNT - DAY_IN_LEDGERS;
+const MAX_CHALLENGE_WINDOW_SECS: u64 = 7 * 24 * 60 * 60;
+
 #[contract]
 pub struct Tholos;
 
@@ -129,7 +138,7 @@ impl Tholos {
         if bond_amount <= 0 {
             return Err(Error::InvalidBondAmount);
         }
-        if challenge_window_secs == 0 {
+        if challenge_window_secs == 0 || challenge_window_secs > MAX_CHALLENGE_WINDOW_SECS {
             return Err(Error::InvalidChallengeWindow);
         }
 
@@ -236,9 +245,7 @@ impl Tholos {
             voted: Vec::new(&env),
             resolvers: Vec::new(&env),
         };
-        env.storage()
-            .persistent()
-            .set(&DataKey::Assertion(id), &assertion);
+        Self::set_assertion(&env, id, &assertion);
 
         let token_id: Address = Self::get(&env, &DataKey::Token)?;
         token::Client::new(&env, &token_id).transfer(
@@ -283,9 +290,7 @@ impl Tholos {
         // already disputed, rather than still `Pending`.
         assertion.disputer = Some(disputer.clone());
         assertion.status = Status::Disputed;
-        env.storage()
-            .persistent()
-            .set(&DataKey::Assertion(id), &assertion);
+        Self::set_assertion(&env, id, &assertion);
 
         let token_id: Address = Self::get(&env, &DataKey::Token)?;
         token::Client::new(&env, &token_id).transfer(
@@ -316,9 +321,7 @@ impl Tholos {
         // a reentrant call from a non-standard token sees this assertion as
         // already resolved, rather than still `Pending`.
         assertion.status = Status::Resolved;
-        env.storage()
-            .persistent()
-            .set(&DataKey::Assertion(id), &assertion);
+        Self::set_assertion(&env, id, &assertion);
 
         let token_id: Address = Self::get(&env, &DataKey::Token)?;
         token::Client::new(&env, &token_id).transfer(
@@ -379,9 +382,7 @@ impl Tholos {
         };
 
         let Some(winner_is_asserter) = winner_is_asserter else {
-            env.storage()
-                .persistent()
-                .set(&DataKey::Assertion(id), &assertion);
+            Self::set_assertion(&env, id, &assertion);
             return Ok(None);
         };
 
@@ -402,9 +403,7 @@ impl Tholos {
         // already resolved (and this resolver as already voted), rather than
         // still open for further votes.
         assertion.status = Status::Resolved;
-        env.storage()
-            .persistent()
-            .set(&DataKey::Assertion(id), &assertion);
+        Self::set_assertion(&env, id, &assertion);
 
         let token_id: Address = Self::get(&env, &DataKey::Token)?;
         token::Client::new(&env, &token_id).transfer(
@@ -430,6 +429,20 @@ impl Tholos {
             .persistent()
             .get(&DataKey::Assertion(id))
             .ok_or(Error::AssertionNotFound)
+    }
+
+    /// Writes an assertion and extends its persistent storage TTL. Every
+    /// write site uses this rather than a bare `.set()` so an assertion's
+    /// ledger entry can't be archived out from under it while it's still
+    /// `Pending` or `Disputed`.
+    fn set_assertion(env: &Env, id: u64, assertion: &Assertion) {
+        let key = DataKey::Assertion(id);
+        env.storage().persistent().set(&key, assertion);
+        env.storage().persistent().extend_ttl(
+            &key,
+            ASSERTION_LIFETIME_THRESHOLD,
+            ASSERTION_BUMP_AMOUNT,
+        );
     }
 
     fn get<T: soroban_sdk::TryFromVal<Env, soroban_sdk::Val>>(
