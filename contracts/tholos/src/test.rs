@@ -1,6 +1,7 @@
 #![cfg(test)]
 
 use super::*;
+use soroban_sdk::testutils::storage::Persistent as _;
 use soroban_sdk::testutils::{Address as _, Ledger};
 
 const DEFAULT_BOND: i128 = 100;
@@ -105,6 +106,33 @@ fn test_uncontested_assertion_finalizes() {
 }
 
 #[test]
+fn test_assertion_storage_ttl_is_extended_on_every_write() {
+    let f = Fixture::new();
+    let asserter = f.funded_address();
+    let disputer = f.funded_address();
+
+    let ttl_of = |id: u64| {
+        f.env.as_contract(&f.client.address, || {
+            f.env
+                .storage()
+                .persistent()
+                .get_ttl(&DataKey::Assertion(id))
+        })
+    };
+
+    let id = f.client.assert_outcome(&asserter, &true);
+    assert_eq!(ttl_of(id), ASSERTION_BUMP_AMOUNT);
+
+    // Advance close to expiry, then confirm disputing (a write) bumps the
+    // TTL back up rather than leaving the entry to lapse.
+    f.env
+        .ledger()
+        .with_mut(|l| l.sequence_number += ASSERTION_BUMP_AMOUNT - 10);
+    f.client.dispute(&disputer, &id);
+    assert_eq!(ttl_of(id), ASSERTION_BUMP_AMOUNT);
+}
+
+#[test]
 fn test_disputed_assertion_pays_winner() {
     let f = Fixture::new();
     let asserter = f.funded_address();
@@ -183,6 +211,26 @@ fn test_cannot_initialize_with_zero_challenge_window() {
 
     let admin = Address::generate(&env);
     let result = client.try_initialize(&admin, &token_id, &DEFAULT_BOND, &0, &resolvers);
+    assert_eq!(result, Err(Ok(Error::InvalidChallengeWindow)));
+}
+
+#[test]
+fn test_cannot_initialize_with_challenge_window_too_large() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (token_id, resolvers) = setup(&env);
+    let contract_id = env.register(Tholos, ());
+    let client = TholosClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let result = client.try_initialize(
+        &admin,
+        &token_id,
+        &DEFAULT_BOND,
+        &(MAX_CHALLENGE_WINDOW_SECS + 1),
+        &resolvers,
+    );
     assert_eq!(result, Err(Ok(Error::InvalidChallengeWindow)));
 }
 
