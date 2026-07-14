@@ -5,6 +5,15 @@ All notable changes to this project are documented here. Format follows
 
 ## [Unreleased]
 
+### Added
+
+- Reentrancy regression tests for `assert_outcome`, `dispute`, and `resolve`,
+  extending the pattern already used for `finalize`. Along the way, confirmed
+  that Soroban's auth model itself rejects a reentrant token's dynamically-triggered
+  nested `require_auth` call, so these three (unlike `finalize`, which needs no
+  signature) aren't actually reachable by a hostile token acting alone; documented
+  in ARCHITECTURE.md and CONTRACT.md. Closes #3.
+
 ### Fixed
 
 - Persistent `Assertion` storage now has its TTL extended by 30 days on every
