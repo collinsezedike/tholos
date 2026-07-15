@@ -55,22 +55,24 @@ State of an assertion: `Pending`, `Disputed`, or `Resolved`.
 | `Paused` | Called `assert_outcome`, `dispute`, or `resolve` while paused |
 | `InvalidBondAmount` | `bond_amount` is zero or negative |
 | `InvalidChallengeWindow` | `challenge_window_secs` is zero or greater than 7 days |
+| `TooManyResolvers` | Resolver list has more than `MAX_RESOLVERS` (21) entries |
 
 ## Functions
 
 ### `initialize(admin, token, bond_amount, challenge_window_secs, resolvers)`
 
-One-time setup. `resolvers` must have an odd, non-zero length so a majority vote can
-never tie. `bond_amount` must be positive and `challenge_window_secs` must be
-non-zero and at most 7 days (see "Persistent storage TTL" below for why). Requires
-`admin`'s signature. Fails with `AlreadyInitialized` if called twice.
+One-time setup. `resolvers` must have an odd, non-zero length, and at most
+`MAX_RESOLVERS` (21), so a majority vote can never tie and no single dispute
+snapshot grows unbounded. `bond_amount` must be positive and `challenge_window_secs`
+must be non-zero and at most 7 days (see "Persistent storage TTL" below for why).
+Requires `admin`'s signature. Fails with `AlreadyInitialized` if called twice.
 
 ### `update_resolvers(new_resolvers)`
 
 Replaces the resolver committee used for assertions disputed *after* this call.
-Requires the stored admin's signature. Same odd-length requirement as `initialize`.
-Emits `ResolversUpdated`. Has no effect on assertions already `Disputed`: each
-dispute snapshots the committee at the moment `dispute` is called (see the
+Requires the stored admin's signature. Same odd-length and `MAX_RESOLVERS` cap as
+`initialize`. Emits `ResolversUpdated`. Has no effect on assertions already
+`Disputed`: each dispute snapshots the committee at the moment `dispute` is called (see the
 `resolvers` field on `Assertion`), and voting for that dispute is decided against
 that snapshot for its whole lifetime, not the live committee. A resolver removed
 after a dispute was opened can still vote on it; a resolver added after can't.
