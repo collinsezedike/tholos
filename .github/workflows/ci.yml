@@ -11,6 +11,18 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Block committed contract addresses
+        run: |
+          # test_snapshots/ is excluded: those JSON files are written by
+          # soroban-sdk's test harness and contain synthetic, deterministic
+          # mock addresses from the mocked test environment, not real
+          # deployed addresses, and are committed deliberately for
+          # reproducibility (see CONTRIBUTING.md's testing section).
+          if grep -rnE --exclude-dir=.git --exclude-dir=target --exclude-dir=test_snapshots '\bC[A-Z2-7]{55}\b' .; then
+            echo "::error::Found what looks like a Stellar contract address committed to the repo. Contract addresses must never be committed, since a deployed address can't be tied to a specific source commit without an independent rebuild. Use placeholder env vars in examples instead (see CONTRIBUTING.md)."
+            exit 1
+          fi
+
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:

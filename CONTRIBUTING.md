@@ -131,6 +131,17 @@ If you changed the contract's public interface (functions, types, errors), updat
 [CONTRACT.md](docs/src/CONTRACT.md) to match; it's meant to stay in sync with
 `lib.rs`, not drift into a separate design doc.
 
+## Reviewing PRs
+
+Never accept a contract address a contributor provides as evidence their change
+works, and never let one land in docs, examples, or code. A deployed address can't
+be tied to a specific source commit without an independent rebuild: a PR's source
+could be correct while the address offered alongside it points at different,
+maliciously altered bytecode. If a change needs testnet verification, rebuild and
+deploy it yourself (or have CI do it) from the PR's actual source; a pasted address
+is never sufficient proof on its own. CI blocks any literal Stellar contract
+address from being committed at all, as a backstop.
+
 ## Commit messages
 
 One-line, imperative, conventional-commit style: `feat:`, `fix:`, `docs:`, `test:`,
