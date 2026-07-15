@@ -17,6 +17,13 @@ All notable changes to this project are documented here. Format follows
   `MAX_RESOLVERS` (21), since the full committee is copied onto every disputed
   assertion. Closes #4.
 
+### Changed
+
+- The `evil_token` test module (`contracts/tholos/src/test.rs`) now uses a typed
+  `DataKey`-style enum for its own storage keys instead of ad hoc `symbol_short!`
+  strings, matching the main contract's convention. Test-only, no behavior
+  change. Closes #6.
+
 ### Fixed
 
 - Persistent `Assertion` storage now has its TTL extended by 30 days on every
