@@ -174,7 +174,11 @@
                   "storage": [
                     {
                       "key": {
-                        "symbol": "bal"
+                        "vec": [
+                          {
+                            "symbol": "Balances"
+                          }
+                        ]
                       },
                       "val": {
                         "map": [
@@ -207,7 +211,11 @@
                     },
                     {
                       "key": {
-                        "symbol": "reentry"
+                        "vec": [
+                          {
+                            "symbol": "Reentry"
+                          }
+                        ]
                       },
                       "val": {
                         "vec": [
@@ -219,7 +227,11 @@
                     },
                     {
                       "key": {
-                        "symbol": "tholos"
+                        "vec": [
+                          {
+                            "symbol": "Tholos"
+                          }
+                        ]
                       },
                       "val": {
                         "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAK3IM"

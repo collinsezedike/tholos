@@ -545,7 +545,7 @@ fn test_operations_on_unknown_assertion_fail() {
 /// `require_auth`, with the state-before-transfer ordering as a second layer
 /// of defense in case a colluding, pre-authorized signer ever got one through.
 mod evil_token {
-    use soroban_sdk::{contract, contractimpl, contracttype, symbol_short, Address, Env, Map};
+    use soroban_sdk::{contract, contractimpl, contracttype, Address, Env, Map};
 
     /// Which Tholos call to attempt reentrantly, and with what arguments.
     /// `transfer` disarms this (sets it back to `None`) before acting on it,
@@ -561,56 +561,46 @@ mod evil_token {
         Finalize(u64),
     }
 
+    /// Storage keys for `EvilToken`, mirroring the `DataKey` pattern used by
+    /// the real Tholos contract instead of ad hoc `symbol_short!` strings.
+    #[contracttype]
+    pub enum DataKey {
+        Tholos,
+        Reentry,
+        Balances,
+    }
+
     #[contract]
     pub struct EvilToken;
 
     #[contractimpl]
     impl EvilToken {
         pub fn configure(env: Env, tholos_id: Address, reentry: Reentry) {
-            env.storage()
-                .instance()
-                .set(&symbol_short!("tholos"), &tholos_id);
-            env.storage()
-                .instance()
-                .set(&symbol_short!("reentry"), &reentry);
+            env.storage().instance().set(&DataKey::Tholos, &tholos_id);
+            env.storage().instance().set(&DataKey::Reentry, &reentry);
         }
 
         pub fn credit(env: Env, addr: Address, amount: i128) {
-            let mut balances: Map<Address, i128> = env
-                .storage()
-                .instance()
-                .get(&symbol_short!("bal"))
-                .unwrap_or(Map::new(&env));
+            let mut balances = Self::balances(&env);
             let current = balances.get(addr.clone()).unwrap_or(0);
             balances.set(addr, current + amount);
-            env.storage()
-                .instance()
-                .set(&symbol_short!("bal"), &balances);
+            env.storage().instance().set(&DataKey::Balances, &balances);
         }
 
         pub fn balance(env: Env, addr: Address) -> i128 {
-            let balances: Map<Address, i128> = env
-                .storage()
-                .instance()
-                .get(&symbol_short!("bal"))
-                .unwrap_or(Map::new(&env));
-            balances.get(addr).unwrap_or(0)
+            Self::balances(&env).get(addr).unwrap_or(0)
         }
 
         pub fn transfer(env: Env, from: Address, to: Address, amount: i128) {
-            if let Some(tholos_id) = env
-                .storage()
-                .instance()
-                .get::<_, Address>(&symbol_short!("tholos"))
-            {
+            if let Some(tholos_id) = env.storage().instance().get::<_, Address>(&DataKey::Tholos) {
                 let reentry: Reentry = env
                     .storage()
                     .instance()
-                    .get(&symbol_short!("reentry"))
+                    .get(&DataKey::Reentry)
                     .unwrap_or(Reentry::None);
                 env.storage()
                     .instance()
-                    .set(&symbol_short!("reentry"), &Reentry::None);
+                    .set(&DataKey::Reentry, &Reentry::None);
 
                 let client = super::TholosClient::new(&env, &tholos_id);
                 // A well-behaved caller would fail cleanly here if Tholos has
@@ -633,18 +623,19 @@ mod evil_token {
                 }
             }
 
-            let mut balances: Map<Address, i128> = env
-                .storage()
-                .instance()
-                .get(&symbol_short!("bal"))
-                .unwrap_or(Map::new(&env));
+            let mut balances = Self::balances(&env);
             let from_bal = balances.get(from.clone()).unwrap_or(0);
             let to_bal = balances.get(to.clone()).unwrap_or(0);
             balances.set(from, from_bal - amount);
             balances.set(to, to_bal + amount);
+            env.storage().instance().set(&DataKey::Balances, &balances);
+        }
+
+        fn balances(env: &Env) -> Map<Address, i128> {
             env.storage()
                 .instance()
-                .set(&symbol_short!("bal"), &balances);
+                .get(&DataKey::Balances)
+                .unwrap_or(Map::new(env))
         }
     }
 }
