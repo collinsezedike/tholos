@@ -13,6 +13,9 @@ All notable changes to this project are documented here. Format follows
   nested `require_auth` call, so these three (unlike `finalize`, which needs no
   signature) aren't actually reachable by a hostile token acting alone; documented
   in ARCHITECTURE.md and CONTRACT.md. Closes #3.
+- `initialize` and `update_resolvers` now reject resolver committees larger than
+  `MAX_RESOLVERS` (21), since the full committee is copied onto every disputed
+  assertion. Closes #4.
 
 ### Fixed
 
@@ -24,6 +27,11 @@ All notable changes to this project are documented here. Format follows
 - `initialize` now rejects `challenge_window_secs` over 7 days, not just zero.
   A window close to the 30-day TTL bump left little margin for `finalize` or
   `resolve` to actually be called before the entry risked archival. Closes #2.
+- The internal `NextId` read in `assert_outcome` now goes through the same
+  `NotInitialized`-returning helper as every other storage read, instead of
+  silently defaulting via `.unwrap_or(0)`. No observable behavior change (the
+  pause check already fails first on an uninitialized contract), but removes
+  an inconsistent pattern. Closes #5.
 
 ## [0.2.0] - 2026-07-10
 
