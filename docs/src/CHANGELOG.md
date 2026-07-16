@@ -40,6 +40,16 @@ All notable changes to this project are documented here. Format follows
   CI could previously pass without ever building, testing, or linting it.
   Closes #43.
 
+- Resolver self-rotation: the committee can now replace one of its own by a strict
+  majority vote (`propose_rotation`, `vote_rotation`, `cancel_rotation`), removing
+  the admin as the only path to committee membership. `update_resolvers` remains as
+  the emergency override; both paths emit `ResolversUpdated`, and rotation adds
+  `RotationProposed` / `RotationExecuted` / `RotationCancelled` for the governance
+  trail. One rotation may be open at a time, with a deterministic deadlock guard so a
+  lost proposer key can't block rotation. Writes the same `Resolvers` slot as
+  `update_resolvers`, so it has no effect on disputes already open (their committee
+  is snapshotted at `dispute` time). Design in `docs/src/ROTATION_DESIGN.md`. Closes
+  the self-rotation item from CONTRACT.md's Known gaps.
 - Reentrancy regression tests for `assert_outcome`, `dispute`, and `resolve`,
   extending the pattern already used for `finalize`. Along the way, confirmed
   that Soroban's auth model itself rejects a reentrant token's dynamically-triggered
