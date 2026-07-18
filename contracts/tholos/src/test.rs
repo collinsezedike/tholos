@@ -103,13 +103,14 @@ fn test_uncontested_assertion_finalizes() {
     f.advance_past_window();
 
     // Zero reward bps (the default): full bond back to asserter, caller gets
-    // nothing, no auth required.
+    // nothing. Auth is still required unconditionally so the recorded
+    // finalizer is always a verified address.
     let outcome = f.client.finalize(&caller, &id);
     assert!(outcome);
     assert_eq!(f.token.balance(&asserter), 1_000);
     assert_eq!(f.token.balance(&caller), 0);
 
-    // Finalizer is recorded on the assertion.
+    // Finalizer is always recorded now — caller required auth unconditionally.
     let state = f.client.get_assertion_state(&id);
     assert_eq!(state.finalizer, Some(caller));
 }
@@ -461,7 +462,7 @@ fn test_paused_blocks_assert_dispute_and_resolve_but_not_finalize() {
     );
 
     f.advance_past_window();
-    let outcome = f.client.finalize(&f.generate(), &pending_id);
+    let outcome = f.client.finalize(&asserter, &pending_id);
     assert!(outcome);
     assert_eq!(f.token.balance(&asserter), 1_000);
 
@@ -538,7 +539,7 @@ fn test_operations_on_unknown_assertion_fail() {
         Err(Ok(Error::AssertionNotFound))
     );
     assert_eq!(
-        f.client.try_finalize(&f.generate(), &42),
+        f.client.try_finalize(&disputer, &42),
         Err(Ok(Error::AssertionNotFound))
     );
     assert_eq!(
@@ -611,6 +612,7 @@ fn test_finalize_with_reward_pays_caller_and_asserter() {
 #[test]
 fn test_finalize_zero_reward_full_bond_returned() {
     // Explicit zero bps: full bond back to asserter, caller gets nothing.
+    // Auth is still required; the finalizer is recorded.
     let (f, _) = fixture_with_reward(0);
     let asserter = f.funded_address();
     let caller = f.generate();
@@ -620,7 +622,9 @@ fn test_finalize_zero_reward_full_bond_returned() {
     f.client.finalize(&caller, &id);
 
     assert_eq!(f.token.balance(&asserter), 1_000);
-    assert_eq!(f.token.balance(&caller), 0);
+    // finalizer is now always recorded — caller must authorize unconditionally.
+    let state = f.client.get_assertion_state(&id);
+    assert_eq!(state.finalizer, Some(caller));
 }
 
 #[test]
@@ -660,6 +664,35 @@ fn test_cannot_initialize_with_reward_bps_over_max() {
 }
 
 #[test]
+fn test_finalize_requires_auth_when_reward_bps_is_zero() {
+    // The core fix for the flagged review comment: finalize requires
+    // caller.require_auth() unconditionally, even when finalize_reward_bps is
+    // 0 (no reward configured). Verify via env.auths() that the auth was
+    // actually invoked for the caller's address.
+    let (f, _) = fixture_with_reward(0);
+    let asserter = f.funded_address();
+    let caller = f.generate();
+
+    let id = f.client.assert_outcome(&asserter, &true);
+    f.advance_past_window();
+    f.client.finalize(&caller, &id);
+
+    // env.auths() returns every require_auth invocation that occurred during
+    // the last contract call. The caller's auth must appear in this list,
+    // proving it was checked even with zero reward bps.
+    let auths = f.env.auths();
+    let caller_was_authed = auths.iter().any(|(addr, _)| *addr == caller);
+    assert!(
+        caller_was_authed,
+        "caller's require_auth was not invoked during finalize with 0 bps"
+    );
+
+    // Confirm finalizer is recorded (not None) since auth was verified.
+    let state = f.client.get_assertion_state(&id);
+    assert_eq!(state.finalizer, Some(caller));
+}
+
+#[test]
 fn test_finalize_with_reward_works_while_paused() {
     // Finalize is deliberately exempt from the pause; reward payout must also
     // work when the contract is paused.
@@ -683,14 +716,13 @@ fn test_finalize_with_reward_works_while_paused() {
 /// written before the external transfer rather than after it.
 ///
 /// The evil-token tests initialize Tholos with `finalize_reward_bps = 0`, so
-/// `finalize` requires no auth in this context and is therefore the one
-/// function a hostile token can realistically reenter on its own. The
-/// reentrancy tests for the other, auth-gated functions (`assert_outcome`,
-/// `dispute`, `resolve`) mainly confirm Soroban's own auth model rejects a
-/// dynamically-triggered nested `require_auth`, with the state-before-transfer
-/// ordering as a second layer of defense in case a colluding, pre-authorized
-/// signer ever got one through. When `finalize_reward_bps` is non-zero,
-/// `finalize` is also auth-gated and gains the same first-layer protection.
+/// `finalize` pays no reward in this context. Because `finalize` requires
+/// `caller.require_auth()` unconditionally, a reentrant token attempting to
+/// call `finalize` from inside its own `transfer` is rejected by Soroban's
+/// auth model (the same first-layer protection that applies to `assert_outcome`,
+/// `dispute`, and `resolve`). The state-before-transfer ordering is a second
+/// layer of defense in case a colluding, pre-authorized signer ever got one
+/// through.
 mod evil_token {
     use soroban_sdk::{contract, contractimpl, contracttype, Address, Env, Map};
 
@@ -954,7 +986,10 @@ fn test_finalize_is_not_reentrant() {
     env.ledger().with_mut(|l| l.timestamp += DEFAULT_WINDOW + 1);
 
     // Arm the trap: EvilToken.transfer will now try to reenter finalize(id)
-    // on itself, before finalize's own transfer call even returns.
+    // on itself, before finalize's own transfer call even returns. Because
+    // finalize requires caller.require_auth() unconditionally, Soroban's auth
+    // model rejects the reentrant nested require_auth; the state-before-
+    // transfer ordering is a second layer of defense.
     evil_token.configure(&contract_id, &Reentry::Finalize(caller.clone(), id));
 
     let outcome = client.finalize(&caller, &id);

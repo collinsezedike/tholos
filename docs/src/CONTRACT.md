@@ -37,7 +37,7 @@ State of an assertion: `Pending`, `Disputed`, or `Resolved`.
 | `votes_for_outcome` / `votes_against_outcome` | `u32` | Resolver vote tally |
 | `voted` | `Vec<Address>` | Resolvers who have already voted, to prevent double-voting |
 | `resolvers` | `Vec<Address>` | The resolver committee snapshotted at dispute time; empty until `dispute` is called. See `resolve` below. |
-| `finalizer` | `Option<Address>` | Who called `finalize`, if the assertion was finalized (not resolved via `resolve`). `None` until `finalize` is called. |
+| `finalizer` | `Option<Address>` | Who called `finalize`, if the assertion was finalized (not resolved via `resolve`). `None` until `finalize` is called; always `Some(caller)` after — the caller must authorize unconditionally, so this is always a verified address once set. |
 
 ### `Error`
 
@@ -106,12 +106,22 @@ assertion isn't pending (including if it's already disputed), or
 ### `finalize(caller, id) -> bool`
 
 Callable once a `Pending` assertion's challenge window has elapsed with no dispute.
-If `finalize_reward_bps` is non-zero, `caller` must authorize the call and receives
-`bond * finalize_reward_bps / 10_000` tokens as an incentive for prompt
-finalization; the asserter receives the remainder. If `finalize_reward_bps` is zero,
-no auth is required and the full bond is returned to the asserter (original
-behavior). Returns the asserted outcome. Fails with `ChallengeWindowOpen` if called
-too early. Emits `Finalized` with `finalizer` and `reward` fields.
+`caller` must authorize the call unconditionally — regardless of whether
+`finalize_reward_bps` is zero — so the address recorded in `Assertion.finalizer`
+and the `Finalized` event is always a verified caller and cannot be spoofed. This
+applies even when no reward is being paid: without enforced auth, any address could
+be passed as `caller`, permanently writing an unverifiable identity into the
+on-chain record.
+
+- When `finalize_reward_bps` is **non-zero**, `caller` also receives
+  `bond * finalize_reward_bps / 10_000` tokens as an incentive for prompt
+  finalization; the asserter receives the remainder.
+- When `finalize_reward_bps` is **zero** (the default), no reward is paid and the
+  full bond is returned to the asserter. Auth is still required.
+
+In both cases `Assertion.finalizer` is set to `Some(caller)`.
+
+Returns the asserted outcome. Fails with `ChallengeWindowOpen` if called too early. Emits `Finalized` with `finalizer` (`Address`) and `reward` fields.
 
 ### `resolve(resolver, id, agrees_with_asserter) -> Option<bool>`
 
@@ -142,12 +152,16 @@ unrelated assertions. All four functions have a regression test in
 `contracts/tholos/src/test.rs` (`test_*_is_not_reentrant`) that exercises this
 directly against a token built to attempt exactly that reentrant call.
 
-When `finalize_reward_bps` is non-zero, `finalize` requires `caller`'s auth.
-Soroban's auth model then independently rejects a reentrant token's nested
-`require_auth`, making `finalize` equivalent to the other three auth-gated
-functions in that configuration. When `finalize_reward_bps` is zero, no auth is
-required (original behavior), but the state-before-transfer ordering still
-prevents a double payout via reentrancy.
+`finalize` requires `caller.require_auth()` unconditionally — regardless of whether
+`finalize_reward_bps` is zero. Without this, a zero-bps deployment would accept any
+address as `caller` with no authorization, permanently writing an unverifiable
+identity into `Assertion.finalizer` and the `Finalized` event as the "finalizer of
+record." No funds are at risk (the caller only ever receives its own reward), but the
+audit trail would be spoofable. Requiring auth unconditionally ensures the recorded
+finalizer is always a verified address. Soroban's auth model also independently
+rejects a reentrant token's nested `require_auth`, giving `finalize` the same
+first-layer reentrancy protection as `assert_outcome`, `dispute`, and `resolve`.
+The state-before-transfer ordering is a second layer of defense in both cases.
 
 ### Persistent storage TTL
 
@@ -170,13 +184,12 @@ history without polling `get_assertion_state`:
 | --- | --- | --- |
 | `Asserted` | `assert_outcome` | `id`, `asserter`, `outcome` |
 | `Disputed` | `dispute` | `id`, `disputer` |
-| `Finalized` | `finalize` | `id`, `outcome`, `finalizer`, `reward` |
+| `Finalized` | `finalize` | `id`, `outcome`, `finalizer` (`Address`), `reward` |
 | `Resolved` | `resolve`, once a majority is reached | `id`, `outcome` |
 | `ResolversUpdated` | `update_resolvers` | `resolvers` (the new committee) |
 | `PauseUpdated` | `set_paused` | `paused` |
 
-`Finalized.finalizer` is the address that called `finalize`. `Finalized.reward` is
-the number of tokens paid to that address (0 when `finalize_reward_bps` is 0).
+`Finalized.finalizer` is always the address that called `finalize` — auth is required unconditionally, so this value is always verified regardless of whether `finalize_reward_bps` is non-zero. `Finalized.reward` is the number of tokens paid to that address (0 when `finalize_reward_bps` is 0).
 
 ## Example: calling it with the Stellar CLI
 
@@ -199,9 +212,10 @@ stellar contract invoke --id "$CONTRACT" --source asserter --network testnet -- 
   --asserter "$ASSERTER_ADDRESS" \
   --outcome true
 
-# After the challenge window elapses:
+# After the challenge window elapses.
+# Auth is required unconditionally: pass the caller's address and sign.
 stellar contract invoke --id "$CONTRACT" --source finalizer --network testnet -- finalize \
-  --caller "$FINALIZER_ADDRESS" \
+  --caller "\"$FINALIZER_ADDRESS\"" \
   --id 0
 ```
 

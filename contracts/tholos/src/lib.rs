@@ -24,7 +24,9 @@ pub struct Finalized {
     #[topic]
     pub id: u64,
     pub outcome: bool,
-    /// Who called `finalize`.
+    /// Who called `finalize`. Always a verified address — `finalize` requires
+    /// the caller's auth unconditionally, so this value is trustworthy
+    /// regardless of whether a reward was configured.
     pub finalizer: Address,
     /// How many tokens were paid to the finalizer as a reward (0 when
     /// `finalize_reward_bps` was configured as 0).
@@ -75,7 +77,9 @@ pub struct Assertion {
     /// an already-disputed assertion.
     pub resolvers: Vec<Address>,
     /// Who called `finalize`. `None` until the assertion is finalized via
-    /// `finalize` (never set for assertions resolved via `resolve`).
+    /// `finalize` (never set for assertions resolved via `resolve`). Always
+    /// `Some` after `finalize` completes — the caller must authorize the call
+    /// unconditionally, so this is always a verified address.
     pub finalizer: Option<Address>,
 }
 
@@ -348,13 +352,22 @@ impl Tholos {
     }
 
     /// Finalizes a pending assertion once its challenge window has elapsed
-    /// with no dispute. If `finalize_reward_bps` is non-zero, `caller` must
-    /// provide their address and authorize the call; they receive
-    /// `bond * finalize_reward_bps / 10_000` tokens as an incentive, and the
-    /// asserter receives the remainder. When `finalize_reward_bps` is zero,
-    /// no auth is required and the full bond is returned to the asserter
-    /// (original behavior). Returns the asserted outcome.
+    /// with no dispute. `caller` must authorize the call unconditionally —
+    /// regardless of whether `finalize_reward_bps` is zero — so the address
+    /// recorded in `Assertion.finalizer` and the `Finalized` event is always
+    /// a verified caller and cannot be spoofed. When `finalize_reward_bps` is
+    /// non-zero, `caller` also receives `bond * finalize_reward_bps / 10_000`
+    /// tokens as an incentive for prompt finalization and the asserter
+    /// receives the remainder; when it is zero the full bond is returned to
+    /// the asserter and no reward is paid. Returns the asserted outcome.
     pub fn finalize(env: Env, caller: Address, id: u64) -> Result<bool, Error> {
+        // Auth is required unconditionally: even when finalize_reward_bps is
+        // zero and no reward is paid, the caller's address is written into
+        // Assertion.finalizer and the Finalized event as the finalizer of
+        // record. Requiring auth here ensures that value is always a verified
+        // address, not an arbitrary one anyone could have passed in.
+        caller.require_auth();
+
         let mut assertion = Self::get_assertion(&env, id)?;
         if assertion.status != Status::Pending {
             return Err(Error::NotPending);
@@ -366,10 +379,7 @@ impl Tholos {
         }
 
         let reward_bps: u32 = Self::get(&env, &DataKey::FinalizeRewardBps)?;
-        let reward: i128 = if reward_bps > 0 {
-            // Auth is only required when there is an actual reward to claim,
-            // so zero-bps deployments remain callable by anyone without auth.
-            caller.require_auth();
+        let reward = if reward_bps > 0 {
             assertion.bond * (reward_bps as i128) / 10_000
         } else {
             0
