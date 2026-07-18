@@ -199,8 +199,14 @@ fn test_cannot_initialize_with_too_many_resolvers() {
         too_many.push_back(Address::generate(&env));
     }
 
-    let result =
-        client.try_initialize(&admin, &token_id, &DEFAULT_BOND, &DEFAULT_WINDOW, &too_many, &0u32);
+    let result = client.try_initialize(
+        &admin,
+        &token_id,
+        &DEFAULT_BOND,
+        &DEFAULT_WINDOW,
+        &too_many,
+        &0u32,
+    );
     assert_eq!(result, Err(Ok(Error::TooManyResolvers)));
 }
 
@@ -593,8 +599,8 @@ fn test_finalize_with_reward_pays_caller_and_asserter() {
     let outcome = f.client.finalize(&caller, &id);
 
     assert!(outcome);
-    assert_eq!(f.token.balance(&caller), 5);       // 500 bps of 100
-    assert_eq!(f.token.balance(&asserter), 995);   // 900 + 95
+    assert_eq!(f.token.balance(&caller), 5); // 500 bps of 100
+    assert_eq!(f.token.balance(&asserter), 995); // 900 + 95
 
     // State reflects finalizer.
     let state = f.client.get_assertion_state(&id);

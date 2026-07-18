@@ -389,11 +389,7 @@ impl Tholos {
             // Pay the caller their reward first, then pay the asserter the
             // remainder. Both transfers happen after the state write above, so
             // a reentrant token can't trigger a second finalize on the same id.
-            token_client.transfer(
-                &env.current_contract_address(),
-                &caller,
-                &reward,
-            );
+            token_client.transfer(&env.current_contract_address(), &caller, &reward);
         }
 
         let asserter_payout = assertion.bond - reward;

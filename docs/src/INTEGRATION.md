@@ -87,8 +87,13 @@ requirement, not a default choice.
 
 ## Lifecycle from an integrator's perspective
 
-`finalize` and `resolve` are both permissionless: anyone (a keeper, a bot, an end
-user, your own contract) can call them once the preconditions are met. Tholos does
+`finalize` is permissionless when `finalize_reward_bps` is 0 (the default): anyone
+(a keeper, a bot, an end user, your own contract) can call it once the challenge
+window closes with no dispute, and the full bond is returned to the asserter.
+When `finalize_reward_bps` is non-zero, `finalize` requires auth from the `caller`
+argument; they receive `bond * bps / 10_000` tokens as an incentive, and the
+asserter receives the remainder. `resolve` is always permissionless for members of
+the resolver committee. Tholos does
 not push a callback to your contract when an assertion resolves. If you need to
 react automatically, two options:
 
@@ -131,13 +136,17 @@ event carries, not `get_assertion_state(id).outcome`.
 | `bond_amount` | High enough to deter spam/bad-faith assertions, low enough that legitimate use isn't priced out. Fixed per instance, see above. |
 | `challenge_window_secs` | Longer windows give more time to catch bad assertions but delay uncontested finalization. |
 | `resolvers` | Must be odd-length. See [CONTRACT.md](CONTRACT.md) for what `update_resolvers` can and can't change mid-dispute. |
+| `finalize_reward_bps` | 0–1000 basis points of the bond paid to whoever calls `finalize`. 0 (default) returns the full bond to the asserter with no auth required. Non-zero values incentivize prompt finalization but require `caller` to authorize the call. |
 
 ## Known caveats for integrators
 
-- No reward beyond bond-return for uncontested finalizes: there's currently no fee
-  mechanism, so integrators who want to incentivize keepers to call `finalize`
-  promptly need to handle that themselves (e.g. your own contract pays a small
-  bounty to whoever triggers your callback).
+- Finalize reward is optional and deployment-scoped: `finalize_reward_bps`
+  (0–1000 basis points of the bond) is set once at `initialize` time and applies
+  to every `finalize` call on that instance. If you want to incentivize keepers
+  to call `finalize` promptly, set a non-zero value at deploy time; the reward is
+  funded by the asserter's bond. Setting it to 0 (the default) preserves the
+  original behavior: full bond returned to the asserter, no auth required on
+  `finalize`.
 - The admin can pause `assert_outcome`, `dispute`, and `resolve` at any time via
   `set_paused`. Your integration should treat a `Paused` error as a distinct,
   expected failure mode (surface it to the user as "resolution temporarily
