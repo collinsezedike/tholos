@@ -20,8 +20,6 @@ All notable changes to this project are documented here. Format follows
   fields: `finalizer: Address` and `reward: i128`. `Assertion` gains a new
   `finalizer: Option<Address>` field populated on finalize. Closes #17.
 
-### Added
-
 - Reentrancy regression tests for `assert_outcome`, `dispute`, and `resolve`,
   extending the pattern already used for `finalize`. Along the way, confirmed
   that Soroban's auth model itself rejects a reentrant token's dynamically-triggered

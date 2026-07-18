@@ -676,12 +676,15 @@ fn test_finalize_with_reward_works_while_paused() {
 /// or merely non-standard (e.g. hook-bearing) SEP-41 token, to prove state is
 /// written before the external transfer rather than after it.
 ///
-/// `finalize` requires no auth, so it's the one function a hostile token can
-/// realistically reenter on its own; the reentrancy tests for the other,
-/// auth-gated functions (`assert_outcome`, `dispute`, `resolve`) mainly
-/// confirm Soroban's own auth model rejects a dynamically-triggered nested
-/// `require_auth`, with the state-before-transfer ordering as a second layer
-/// of defense in case a colluding, pre-authorized signer ever got one through.
+/// The evil-token tests initialize Tholos with `finalize_reward_bps = 0`, so
+/// `finalize` requires no auth in this context and is therefore the one
+/// function a hostile token can realistically reenter on its own. The
+/// reentrancy tests for the other, auth-gated functions (`assert_outcome`,
+/// `dispute`, `resolve`) mainly confirm Soroban's own auth model rejects a
+/// dynamically-triggered nested `require_auth`, with the state-before-transfer
+/// ordering as a second layer of defense in case a colluding, pre-authorized
+/// signer ever got one through. When `finalize_reward_bps` is non-zero,
+/// `finalize` is also auth-gated and gains the same first-layer protection.
 mod evil_token {
     use soroban_sdk::{contract, contractimpl, contracttype, Address, Env, Map};
 
