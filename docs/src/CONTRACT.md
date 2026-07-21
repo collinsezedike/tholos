@@ -58,6 +58,7 @@ State of an assertion: `Pending`, `Disputed`, or `Resolved`.
 | `InvalidChallengeWindow` | `challenge_window_secs` is zero or greater than 7 days |
 | `TooManyResolvers` | Resolver list has more than `MAX_RESOLVERS` (21) entries |
 | `InvalidFinalizeReward` | `finalize_reward_bps` is greater than `MAX_FINALIZE_REWARD_BPS` (1000) |
+| `DuplicateResolvers` | Resolver list contains the same address more than once |
 
 ## Functions
 
