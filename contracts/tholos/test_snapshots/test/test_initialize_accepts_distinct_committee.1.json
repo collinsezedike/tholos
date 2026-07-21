@@ -1,6 +1,6 @@
 {
   "generators": {
-    "address": 30,
+    "address": 7,
     "nonce": 0,
     "mux_id": 0
   },
@@ -69,8 +69,7 @@
           "sub_invocations": []
         }
       ]
-    ],
-    []
+    ]
   ],
   "ledger": {
     "protocol_version": 26,
