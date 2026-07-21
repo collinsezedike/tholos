@@ -57,6 +57,7 @@ impl Fixture {
             &DEFAULT_BOND,
             &DEFAULT_WINDOW,
             &resolvers,
+            &0u32,
         );
 
         Fixture {
@@ -94,15 +95,24 @@ impl Fixture {
 fn test_uncontested_assertion_finalizes() {
     let f = Fixture::new();
     let asserter = f.funded_address();
+    let caller = f.generate();
 
     let id = f.client.assert_outcome(&asserter, &true);
     assert_eq!(f.token.balance(&asserter), 900);
 
     f.advance_past_window();
 
-    let outcome = f.client.finalize(&id);
+    // Zero reward bps (the default): full bond back to asserter, caller gets
+    // nothing. Auth is still required unconditionally so the recorded
+    // finalizer is always a verified address.
+    let outcome = f.client.finalize(&caller, &id);
     assert!(outcome);
     assert_eq!(f.token.balance(&asserter), 1_000);
+    assert_eq!(f.token.balance(&caller), 0);
+
+    // Finalizer is always recorded now — caller required auth unconditionally.
+    let state = f.client.get_assertion_state(&id);
+    assert_eq!(state.finalizer, Some(caller));
 }
 
 #[test]
@@ -168,6 +178,7 @@ fn test_cannot_initialize_with_even_resolver_count() {
         &DEFAULT_BOND,
         &DEFAULT_WINDOW,
         &even_resolvers,
+        &0u32,
     );
     assert!(result.is_err());
 }
@@ -189,8 +200,14 @@ fn test_cannot_initialize_with_too_many_resolvers() {
         too_many.push_back(Address::generate(&env));
     }
 
-    let result =
-        client.try_initialize(&admin, &token_id, &DEFAULT_BOND, &DEFAULT_WINDOW, &too_many);
+    let result = client.try_initialize(
+        &admin,
+        &token_id,
+        &DEFAULT_BOND,
+        &DEFAULT_WINDOW,
+        &too_many,
+        &0u32,
+    );
     assert_eq!(result, Err(Ok(Error::TooManyResolvers)));
 }
 
@@ -204,7 +221,7 @@ fn test_cannot_initialize_with_zero_bond_amount() {
     let client = TholosClient::new(&env, &contract_id);
 
     let admin = Address::generate(&env);
-    let result = client.try_initialize(&admin, &token_id, &0, &DEFAULT_WINDOW, &resolvers);
+    let result = client.try_initialize(&admin, &token_id, &0, &DEFAULT_WINDOW, &resolvers, &0u32);
     assert_eq!(result, Err(Ok(Error::InvalidBondAmount)));
 }
 
@@ -218,7 +235,7 @@ fn test_cannot_initialize_with_negative_bond_amount() {
     let client = TholosClient::new(&env, &contract_id);
 
     let admin = Address::generate(&env);
-    let result = client.try_initialize(&admin, &token_id, &-1, &DEFAULT_WINDOW, &resolvers);
+    let result = client.try_initialize(&admin, &token_id, &-1, &DEFAULT_WINDOW, &resolvers, &0u32);
     assert_eq!(result, Err(Ok(Error::InvalidBondAmount)));
 }
 
@@ -238,6 +255,7 @@ fn test_cannot_initialize_with_bond_amount_above_max() {
         &(MAX_BOND_AMOUNT + 1),
         &DEFAULT_WINDOW,
         &resolvers,
+        &0u32,
     );
     assert_eq!(result, Err(Ok(Error::InvalidBondAmount)));
 }
@@ -258,6 +276,7 @@ fn test_can_initialize_with_bond_amount_exactly_at_max() {
         &MAX_BOND_AMOUNT,
         &DEFAULT_WINDOW,
         &resolvers,
+        &0u32,
     );
     assert_eq!(result, Ok(Ok(())));
 }
@@ -267,10 +286,12 @@ fn test_can_initialize_with_bond_amount_exactly_at_max() {
 /// `MAX_BOND_AMOUNT + 1` doesn't just return the right error, it also
 /// leaves the contract's storage untouched (still uninitialized), so no
 /// partial state survives a rejected `initialize` call. This does not
-/// exercise `assert_outcome`, `dispute`, or `resolve` — for confirmation
-/// that the guard actually prevents the dispute-time overflow it exists
-/// to stop, see
-/// `test_bond_amount_overflow_blocked_before_dispute_balance_accumulation`.
+/// exercise `assert_outcome`, `dispute`, `resolve`, or `finalize` — for
+/// confirmation that the guard actually prevents the overflows it exists to
+/// stop, see `test_bond_amount_overflow_blocked_before_dispute_balance_accumulation`
+/// (dispute-balance-sum) and
+/// `test_finalize_reward_multiply_does_not_overflow_at_max_bond_and_max_reward_bps`
+/// (finalize reward-multiply).
 #[test]
 fn test_rejecting_overflow_prone_bond_amount_leaves_contract_uninitialized() {
     let env = Env::default();
@@ -288,6 +309,7 @@ fn test_rejecting_overflow_prone_bond_amount_leaves_contract_uninitialized() {
         &overflowing_bond,
         &DEFAULT_WINDOW,
         &resolvers,
+        &0u32,
     );
     assert_eq!(result, Err(Ok(Error::InvalidBondAmount)));
 
@@ -319,9 +341,13 @@ fn test_bond_amount_overflow_blocked_before_dispute_balance_accumulation() {
     let client = TholosClient::new(&env, &contract_id);
     let admin = Address::generate(&env);
 
-    // The smallest bond_amount whose doubling -- via the asserter's and
-    // disputer's bonds both landing in the contract's token balance across
-    // assert_outcome and dispute -- overflows i128.
+    // One more than the configured limit. `MAX_BOND_AMOUNT` is now sized by
+    // the tighter of two constraints (see its doc comment in lib.rs), but
+    // this test's concern is specifically the dispute-balance-sum one: even
+    // at the old, looser `i128::MAX / 2` bound this value's doubling --  via
+    // the asserter's and disputer's bonds both landing in the contract's
+    // token balance across assert_outcome and dispute -- would overflow
+    // i128.
     let overflowing_bond = MAX_BOND_AMOUNT + 1;
     let result = client.try_initialize(
         &admin,
@@ -329,12 +355,45 @@ fn test_bond_amount_overflow_blocked_before_dispute_balance_accumulation() {
         &overflowing_bond,
         &DEFAULT_WINDOW,
         &resolvers,
+        &0u32,
     );
     assert_eq!(result, Err(Ok(Error::InvalidBondAmount)));
 
     // Nothing was persisted, so assert_outcome -- which would fund the
     // first half of the overflowing sum -- can't even be called.
     assert_eq!(client.try_set_paused(&true), Err(Ok(Error::NotInitialized)));
+}
+
+/// Regression test for the finalize reward-multiply overflow found when
+/// this branch's `MAX_BOND_AMOUNT` bound (`i128::MAX / 2`, sized only for
+/// the dispute-balance-sum constraint) was merged alongside
+/// `finalize_reward_bps` (which multiplies `assertion.bond` by `reward_bps`
+/// before dividing by `10_000`). `i128::MAX / 2` was the pre-fix
+/// `MAX_BOND_AMOUNT` and was accepted on its own (see the now-updated
+/// `test_can_initialize_with_bond_amount_exactly_at_max`), but combined with
+/// a nonzero `finalize_reward_bps` it overflows the reward multiply well
+/// before `finalize` gets to divide. It must be rejected now that
+/// `MAX_BOND_AMOUNT` accounts for both constraints.
+#[test]
+fn test_cannot_initialize_with_bond_amount_safe_under_old_bound_but_unsafe_for_reward_multiply() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (token_id, resolvers) = setup(&env);
+    let contract_id = env.register(Tholos, ());
+    let client = TholosClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+
+    let old_bound_bond_amount = i128::MAX / 2;
+    let result = client.try_initialize(
+        &admin,
+        &token_id,
+        &old_bound_bond_amount,
+        &DEFAULT_WINDOW,
+        &resolvers,
+        &MAX_FINALIZE_REWARD_BPS,
+    );
+    assert_eq!(result, Err(Ok(Error::InvalidBondAmount)));
 }
 
 #[test]
@@ -347,7 +406,7 @@ fn test_cannot_initialize_with_zero_challenge_window() {
     let client = TholosClient::new(&env, &contract_id);
 
     let admin = Address::generate(&env);
-    let result = client.try_initialize(&admin, &token_id, &DEFAULT_BOND, &0, &resolvers);
+    let result = client.try_initialize(&admin, &token_id, &DEFAULT_BOND, &0, &resolvers, &0u32);
     assert_eq!(result, Err(Ok(Error::InvalidChallengeWindow)));
 }
 
@@ -367,6 +426,7 @@ fn test_cannot_initialize_with_challenge_window_too_large() {
         &DEFAULT_BOND,
         &(MAX_CHALLENGE_WINDOW_SECS + 1),
         &resolvers,
+        &0u32,
     );
     assert_eq!(result, Err(Ok(Error::InvalidChallengeWindow)));
 }
@@ -382,6 +442,7 @@ fn test_cannot_initialize_twice() {
         &DEFAULT_BOND,
         &DEFAULT_WINDOW,
         &f.resolvers,
+        &0u32,
     );
     assert_eq!(result, Err(Ok(Error::AlreadyInitialized)));
 }
@@ -390,10 +451,11 @@ fn test_cannot_initialize_twice() {
 fn test_cannot_finalize_before_window_closes() {
     let f = Fixture::new();
     let asserter = f.funded_address();
+    let caller = f.generate();
 
     let id = f.client.assert_outcome(&asserter, &true);
 
-    let result = f.client.try_finalize(&id);
+    let result = f.client.try_finalize(&caller, &id);
     assert_eq!(result, Err(Ok(Error::ChallengeWindowOpen)));
 }
 
@@ -557,7 +619,7 @@ fn test_paused_blocks_assert_dispute_and_resolve_but_not_finalize() {
     );
 
     f.advance_past_window();
-    let outcome = f.client.finalize(&pending_id);
+    let outcome = f.client.finalize(&asserter, &pending_id);
     assert!(outcome);
     assert_eq!(f.token.balance(&asserter), 1_000);
 
@@ -634,7 +696,7 @@ fn test_operations_on_unknown_assertion_fail() {
         Err(Ok(Error::AssertionNotFound))
     );
     assert_eq!(
-        f.client.try_finalize(&42),
+        f.client.try_finalize(&disputer, &42),
         Err(Ok(Error::AssertionNotFound))
     );
     assert_eq!(
@@ -648,17 +710,219 @@ fn test_operations_on_unknown_assertion_fail() {
     );
 }
 
+// ---------------------------------------------------------------------------
+// Finalize reward tests
+// ---------------------------------------------------------------------------
+
+/// Helper: build a Tholos instance configured with the given reward bps.
+fn fixture_with_reward(bps: u32) -> (Fixture, Address) {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (token_id, resolvers) = setup(&env);
+    let token = token::Client::new(&env, &token_id);
+    let contract_id = env.register(Tholos, ());
+    let client = TholosClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    client.initialize(
+        &admin,
+        &token_id,
+        &DEFAULT_BOND,
+        &DEFAULT_WINDOW,
+        &resolvers,
+        &bps,
+    );
+    let f = Fixture {
+        env,
+        client,
+        token,
+        token_id,
+        resolvers,
+    };
+    let contract_addr = f.client.address.clone();
+    (f, contract_addr)
+}
+
+#[test]
+fn test_finalize_with_reward_pays_caller_and_asserter() {
+    // 500 bps = 5 % of bond (100) = 5 tokens to caller; 95 back to asserter.
+    let (f, _) = fixture_with_reward(500);
+    let asserter = f.funded_address();
+    let caller = f.generate(); // no tokens yet
+
+    let id = f.client.assert_outcome(&asserter, &true);
+    assert_eq!(f.token.balance(&asserter), 900); // bond deducted
+
+    f.advance_past_window();
+    let outcome = f.client.finalize(&caller, &id);
+
+    assert!(outcome);
+    assert_eq!(f.token.balance(&caller), 5); // 500 bps of 100
+    assert_eq!(f.token.balance(&asserter), 995); // 900 + 95
+
+    // State reflects finalizer.
+    let state = f.client.get_assertion_state(&id);
+    assert_eq!(state.finalizer, Some(caller));
+    assert_eq!(state.status, Status::Resolved);
+}
+
+#[test]
+fn test_finalize_zero_reward_full_bond_returned() {
+    // Explicit zero bps: full bond back to asserter, caller gets nothing.
+    // Auth is still required; the finalizer is recorded.
+    let (f, _) = fixture_with_reward(0);
+    let asserter = f.funded_address();
+    let caller = f.generate();
+
+    let id = f.client.assert_outcome(&asserter, &true);
+    f.advance_past_window();
+    f.client.finalize(&caller, &id);
+
+    assert_eq!(f.token.balance(&asserter), 1_000);
+    // finalizer is now always recorded — caller must authorize unconditionally.
+    let state = f.client.get_assertion_state(&id);
+    assert_eq!(state.finalizer, Some(caller));
+}
+
+#[test]
+fn test_finalize_max_reward_bps() {
+    // 1000 bps = 10 % of bond (100) = 10 tokens to caller; 90 to asserter.
+    let (f, _) = fixture_with_reward(MAX_FINALIZE_REWARD_BPS);
+    let asserter = f.funded_address();
+    let caller = f.generate();
+
+    let id = f.client.assert_outcome(&asserter, &true);
+    f.advance_past_window();
+    f.client.finalize(&caller, &id);
+
+    assert_eq!(f.token.balance(&caller), 10);
+    assert_eq!(f.token.balance(&asserter), 990);
+}
+
+/// The test that would have caught the finalize reward-multiply overflow
+/// before this merge: `finalize` computes
+/// `assertion.bond * (reward_bps as i128) / 10_000`, multiplying before it
+/// divides. With `bond_amount` at `MAX_BOND_AMOUNT` and `reward_bps` at
+/// `MAX_FINALIZE_REWARD_BPS`, that intermediate product must not overflow
+/// `i128`. Unlike the dispute/resolve overflow this bound also guards
+/// against, this path never touches `dispute` or `resolve` at all --
+/// `assert_outcome` straight into `finalize` is enough to hit it.
+#[test]
+fn test_finalize_reward_multiply_does_not_overflow_at_max_bond_and_max_reward_bps() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (token_id, resolvers) = setup(&env);
+    let token = token::Client::new(&env, &token_id);
+    let contract_id = env.register(Tholos, ());
+    let client = TholosClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    client.initialize(
+        &admin,
+        &token_id,
+        &MAX_BOND_AMOUNT,
+        &DEFAULT_WINDOW,
+        &resolvers,
+        &MAX_FINALIZE_REWARD_BPS,
+    );
+
+    let asserter = Address::generate(&env);
+    token::StellarAssetClient::new(&env, &token_id).mint(&asserter, &MAX_BOND_AMOUNT);
+    let caller = Address::generate(&env);
+
+    let id = client.assert_outcome(&asserter, &true);
+    env.ledger().with_mut(|l| l.timestamp += DEFAULT_WINDOW + 1);
+    let outcome = client.finalize(&caller, &id);
+
+    assert!(outcome);
+    // 1000 bps of MAX_BOND_AMOUNT = MAX_BOND_AMOUNT / 10, computed without
+    // overflowing the intermediate `bond * reward_bps` product.
+    let expected_reward = MAX_BOND_AMOUNT / 10;
+    assert_eq!(token.balance(&caller), expected_reward);
+    assert_eq!(token.balance(&asserter), MAX_BOND_AMOUNT - expected_reward);
+}
+
+#[test]
+fn test_cannot_initialize_with_reward_bps_over_max() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (token_id, resolvers) = setup(&env);
+    let contract_id = env.register(Tholos, ());
+    let client = TholosClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+
+    let result = client.try_initialize(
+        &admin,
+        &token_id,
+        &DEFAULT_BOND,
+        &DEFAULT_WINDOW,
+        &resolvers,
+        &(MAX_FINALIZE_REWARD_BPS + 1),
+    );
+    assert_eq!(result, Err(Ok(Error::InvalidFinalizeReward)));
+}
+
+#[test]
+fn test_finalize_requires_auth_when_reward_bps_is_zero() {
+    // The core fix for the flagged review comment: finalize requires
+    // caller.require_auth() unconditionally, even when finalize_reward_bps is
+    // 0 (no reward configured). Verify via env.auths() that the auth was
+    // actually invoked for the caller's address.
+    let (f, _) = fixture_with_reward(0);
+    let asserter = f.funded_address();
+    let caller = f.generate();
+
+    let id = f.client.assert_outcome(&asserter, &true);
+    f.advance_past_window();
+    f.client.finalize(&caller, &id);
+
+    // env.auths() returns every require_auth invocation that occurred during
+    // the last contract call. The caller's auth must appear in this list,
+    // proving it was checked even with zero reward bps.
+    let auths = f.env.auths();
+    let caller_was_authed = auths.iter().any(|(addr, _)| *addr == caller);
+    assert!(
+        caller_was_authed,
+        "caller's require_auth was not invoked during finalize with 0 bps"
+    );
+
+    // Confirm finalizer is recorded (not None) since auth was verified.
+    let state = f.client.get_assertion_state(&id);
+    assert_eq!(state.finalizer, Some(caller));
+}
+
+#[test]
+fn test_finalize_with_reward_works_while_paused() {
+    // Finalize is deliberately exempt from the pause; reward payout must also
+    // work when the contract is paused.
+    let (f, _) = fixture_with_reward(200); // 2 % = 2 tokens
+    let asserter = f.funded_address();
+    let caller = f.generate();
+
+    let id = f.client.assert_outcome(&asserter, &true);
+    f.client.set_paused(&true);
+    f.advance_past_window();
+
+    let outcome = f.client.finalize(&caller, &id);
+    assert!(outcome);
+    assert_eq!(f.token.balance(&caller), 2);
+    assert_eq!(f.token.balance(&asserter), 998);
+}
+
 /// A minimal token that reenters a Tholos call from inside its own
 /// `transfer`, before doing its own balance bookkeeping. Models a malicious
 /// or merely non-standard (e.g. hook-bearing) SEP-41 token, to prove state is
 /// written before the external transfer rather than after it.
 ///
-/// `finalize` requires no auth, so it's the one function a hostile token can
-/// realistically reenter on its own; the reentrancy tests for the other,
-/// auth-gated functions (`assert_outcome`, `dispute`, `resolve`) mainly
-/// confirm Soroban's own auth model rejects a dynamically-triggered nested
-/// `require_auth`, with the state-before-transfer ordering as a second layer
-/// of defense in case a colluding, pre-authorized signer ever got one through.
+/// The evil-token tests initialize Tholos with `finalize_reward_bps = 0`, so
+/// `finalize` pays no reward in this context. Because `finalize` requires
+/// `caller.require_auth()` unconditionally, a reentrant token attempting to
+/// call `finalize` from inside its own `transfer` is rejected by Soroban's
+/// auth model (the same first-layer protection that applies to `assert_outcome`,
+/// `dispute`, and `resolve`). The state-before-transfer ordering is a second
+/// layer of defense in case a colluding, pre-authorized signer ever got one
+/// through.
 mod evil_token {
     use soroban_sdk::{contract, contractimpl, contracttype, Address, Env, Map};
 
@@ -673,7 +937,7 @@ mod evil_token {
         AssertOutcome(Address, bool),
         Dispute(Address, u64),
         Resolve(Address, u64, bool),
-        Finalize(u64),
+        Finalize(Address, u64),
     }
 
     /// Storage keys for `EvilToken`, mirroring the `DataKey` pattern used by
@@ -732,8 +996,8 @@ mod evil_token {
                     Reentry::Resolve(resolver, id, agrees_with_asserter) => {
                         let _ = client.try_resolve(&resolver, &id, &agrees_with_asserter);
                     }
-                    Reentry::Finalize(id) => {
-                        let _ = client.try_finalize(&id);
+                    Reentry::Finalize(caller, id) => {
+                        let _ = client.try_finalize(&caller, &id);
                     }
                 }
             }
@@ -790,6 +1054,7 @@ fn evil_fixture(
         &DEFAULT_BOND,
         &DEFAULT_WINDOW,
         &resolvers,
+        &0u32,
     );
 
     (evil_token, client, contract_id, resolvers)
@@ -910,6 +1175,7 @@ fn test_finalize_is_not_reentrant() {
     let (evil_token, client, contract_id, _resolvers) = evil_fixture(&env);
 
     let asserter = Address::generate(&env);
+    let caller = Address::generate(&env);
     evil_token.credit(&asserter, &1_000);
 
     // The reentrancy trap isn't armed yet, so this assert_outcome call's own
@@ -920,10 +1186,13 @@ fn test_finalize_is_not_reentrant() {
     env.ledger().with_mut(|l| l.timestamp += DEFAULT_WINDOW + 1);
 
     // Arm the trap: EvilToken.transfer will now try to reenter finalize(id)
-    // on itself, before finalize's own transfer call even returns.
-    evil_token.configure(&contract_id, &Reentry::Finalize(id));
+    // on itself, before finalize's own transfer call even returns. Because
+    // finalize requires caller.require_auth() unconditionally, Soroban's auth
+    // model rejects the reentrant nested require_auth; the state-before-
+    // transfer ordering is a second layer of defense.
+    evil_token.configure(&contract_id, &Reentry::Finalize(caller.clone(), id));
 
-    let outcome = client.finalize(&id);
+    let outcome = client.finalize(&caller, &id);
     assert!(outcome);
 
     // Exactly one bond's worth was returned, not two. If Tholos wrote state
@@ -1000,6 +1269,7 @@ mod proptest_vote_counting {
             &DEFAULT_BOND,
             &DEFAULT_WINDOW,
             &resolvers_sdk,
+            &0u32,
         );
 
         let fixture = Fixture {
@@ -1229,6 +1499,7 @@ mod proptest_initialize_bounds {
                 &bond_amount,
                 &challenge_window_secs,
                 &resolvers,
+                &0u32,
             );
 
             match expected_result(bond_amount, challenge_window_secs) {
@@ -1271,6 +1542,7 @@ mod proptest_initialize_bounds {
                 &bond_amount,
                 &challenge_window_secs,
                 &resolvers,
+                &0u32,
             );
 
             match expected_result(bond_amount, challenge_window_secs) {
