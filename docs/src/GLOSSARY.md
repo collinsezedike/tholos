@@ -37,7 +37,18 @@ is odd-length.
 
 **Finalize**
 Closing out a `Pending` assertion after its challenge window has elapsed with no
-dispute. Callable by anyone. Returns the asserter's bond.
+dispute. `caller` must authorize the call. Returns the asserter's bond, minus an
+optional reward paid to `caller` if `finalize_reward_bps` is non-zero.
+
+**Finalizer**
+The address that called `finalize` on an assertion. Recorded in
+`Assertion.finalizer` and the `Finalized` event. Auth is required unconditionally,
+so this is always a verified address.
+
+**Finalize reward**
+The optional cut of the bond (`finalize_reward_bps`, 0–1000 basis points, set at
+`initialize`) paid to whoever calls `finalize`, as an incentive for prompt
+finalization. 0 disables it entirely.
 
 **Resolve**
 Casting one resolver's vote on a `Disputed` assertion. Once a majority agrees,
