@@ -113,6 +113,7 @@ pub enum Error {
     NotAResolver = 9,
     AlreadyVoted = 10,
     Paused = 11,
+    /// `bond_amount` was not positive, or exceeded `MAX_BOND_AMOUNT`.
     InvalidBondAmount = 12,
     InvalidChallengeWindow = 13,
     TooManyResolvers = 14,
@@ -144,6 +145,43 @@ const MAX_RESOLVERS: u32 = 21;
 /// accidentally haircut the asserter's bond by more than a tenth.
 pub const MAX_FINALIZE_REWARD_BPS: u32 = 1_000;
 
+/// `bond_amount` is bounded by the tighter of two independent overflow
+/// constraints:
+///
+/// 1. **Dispute-balance-sum.** The asserter's and disputer's bonds (each
+///    `bond_amount`) both land in the contract's token balance across
+///    `assert_outcome` and `dispute`. The SAC token panics with a balance
+///    overflow inside `receive_balance` once that sum exceeds `i128::MAX`,
+///    so `2 * bond_amount` must stay in range.
+/// 2. **Finalize reward-multiply.** `finalize` computes the caller's
+///    reward as `assertion.bond * (reward_bps as i128) / 10_000` — the
+///    multiply happens *before* the divide, so `bond_amount *
+///    MAX_FINALIZE_REWARD_BPS` must independently stay in range, for any
+///    `reward_bps` up to `MAX_FINALIZE_REWARD_BPS`.
+///
+/// `MAX_FINALIZE_REWARD_BPS` (1000) is greater than the `2` from the first
+/// constraint, so the reward-multiply constraint is tighter and is what
+/// currently binds: `i128::MAX / MAX_FINALIZE_REWARD_BPS` is ~500x smaller
+/// than `i128::MAX / 2`. Deriving `MAX_BOND_AMOUNT` as the minimum of both
+/// keeps this correct automatically if `MAX_FINALIZE_REWARD_BPS` — or a
+/// future divisor introduced elsewhere — ever changes.
+const MAX_BOND_AMOUNT: i128 = {
+    let dispute_balance_sum_bound = i128::MAX / 2;
+    let reward_multiply_bound = i128::MAX / (MAX_FINALIZE_REWARD_BPS as i128);
+    if dispute_balance_sum_bound < reward_multiply_bound {
+        dispute_balance_sum_bound
+    } else {
+        reward_multiply_bound
+    }
+};
+
+// Compile-time guard: if a future change to either constant ever makes
+// `MAX_BOND_AMOUNT * MAX_FINALIZE_REWARD_BPS` overflow again, fail the build
+// instead of silently reintroducing the finalize reward-multiply overflow.
+const _: () = assert!(MAX_BOND_AMOUNT
+    .checked_mul(MAX_FINALIZE_REWARD_BPS as i128)
+    .is_some());
+
 #[contract]
 pub struct Tholos;
 
@@ -174,7 +212,7 @@ impl Tholos {
             return Err(Error::TooManyResolvers);
         }
         Self::assert_unique_resolvers(&resolvers)?;
-        if bond_amount <= 0 {
+        if bond_amount <= 0 || bond_amount > MAX_BOND_AMOUNT {
             return Err(Error::InvalidBondAmount);
         }
         if challenge_window_secs == 0 || challenge_window_secs > MAX_CHALLENGE_WINDOW_SECS {

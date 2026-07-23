@@ -240,6 +240,163 @@ fn test_cannot_initialize_with_negative_bond_amount() {
 }
 
 #[test]
+fn test_cannot_initialize_with_bond_amount_above_max() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (token_id, resolvers) = setup(&env);
+    let contract_id = env.register(Tholos, ());
+    let client = TholosClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let result = client.try_initialize(
+        &admin,
+        &token_id,
+        &(MAX_BOND_AMOUNT + 1),
+        &DEFAULT_WINDOW,
+        &resolvers,
+        &0u32,
+    );
+    assert_eq!(result, Err(Ok(Error::InvalidBondAmount)));
+}
+
+#[test]
+fn test_can_initialize_with_bond_amount_exactly_at_max() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (token_id, resolvers) = setup(&env);
+    let contract_id = env.register(Tholos, ());
+    let client = TholosClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let result = client.try_initialize(
+        &admin,
+        &token_id,
+        &MAX_BOND_AMOUNT,
+        &DEFAULT_WINDOW,
+        &resolvers,
+        &0u32,
+    );
+    assert_eq!(result, Ok(Ok(())));
+}
+
+/// A third boundary-check variant on top of
+/// `test_cannot_initialize_with_bond_amount_above_max`: rejecting
+/// `MAX_BOND_AMOUNT + 1` doesn't just return the right error, it also
+/// leaves the contract's storage untouched (still uninitialized), so no
+/// partial state survives a rejected `initialize` call. This does not
+/// exercise `assert_outcome`, `dispute`, `resolve`, or `finalize` — for
+/// confirmation that the guard actually prevents the overflows it exists to
+/// stop, see `test_bond_amount_overflow_blocked_before_dispute_balance_accumulation`
+/// (dispute-balance-sum) and
+/// `test_finalize_reward_multiply_does_not_overflow_at_max_bond_and_max_reward_bps`
+/// (finalize reward-multiply).
+#[test]
+fn test_rejecting_overflow_prone_bond_amount_leaves_contract_uninitialized() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (token_id, resolvers) = setup(&env);
+    let contract_id = env.register(Tholos, ());
+    let client = TholosClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+
+    let overflowing_bond = MAX_BOND_AMOUNT + 1;
+    let result = client.try_initialize(
+        &admin,
+        &token_id,
+        &overflowing_bond,
+        &DEFAULT_WINDOW,
+        &resolvers,
+        &0u32,
+    );
+    assert_eq!(result, Err(Ok(Error::InvalidBondAmount)));
+
+    // Nothing was persisted: the contract is still uninitialized.
+    assert_eq!(client.try_set_paused(&true), Err(Ok(Error::NotInitialized)));
+}
+
+/// Confirmed by direct experiment (temporarily reverting `initialize`'s
+/// `MAX_BOND_AMOUNT` check and driving a real `assert_outcome` -> `dispute`
+/// -> `resolve` sequence with `overflowing_bond`): the panic this bound
+/// exists to prevent does not happen in `resolve`'s
+/// `assertion.bond * 2`. It happens one step earlier, inside `dispute`,
+/// when the SAC token's `receive_balance` sums the asserter's and
+/// disputer's bonds and that sum exceeds `i128::MAX` — `HostError:
+/// Error(Contract, #12)`, "balance overflow in receive_balance". `resolve`
+/// is never reached; the assertion never leaves the disputed state.
+///
+/// This test proves `initialize`'s guard closes the door before any of
+/// that can happen: the overflow-prone `bond_amount` is rejected up
+/// front, so no `assert_outcome`, `dispute`, or `resolve` call referencing
+/// it can ever run.
+#[test]
+fn test_bond_amount_overflow_blocked_before_dispute_balance_accumulation() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (token_id, resolvers) = setup(&env);
+    let contract_id = env.register(Tholos, ());
+    let client = TholosClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+
+    // One more than the configured limit. `MAX_BOND_AMOUNT` is now sized by
+    // the tighter of two constraints (see its doc comment in lib.rs), but
+    // this test's concern is specifically the dispute-balance-sum one: even
+    // at the old, looser `i128::MAX / 2` bound this value's doubling --  via
+    // the asserter's and disputer's bonds both landing in the contract's
+    // token balance across assert_outcome and dispute -- would overflow
+    // i128.
+    let overflowing_bond = MAX_BOND_AMOUNT + 1;
+    let result = client.try_initialize(
+        &admin,
+        &token_id,
+        &overflowing_bond,
+        &DEFAULT_WINDOW,
+        &resolvers,
+        &0u32,
+    );
+    assert_eq!(result, Err(Ok(Error::InvalidBondAmount)));
+
+    // Nothing was persisted, so assert_outcome -- which would fund the
+    // first half of the overflowing sum -- can't even be called.
+    assert_eq!(client.try_set_paused(&true), Err(Ok(Error::NotInitialized)));
+}
+
+/// Regression test for the finalize reward-multiply overflow found when
+/// this branch's `MAX_BOND_AMOUNT` bound (`i128::MAX / 2`, sized only for
+/// the dispute-balance-sum constraint) was merged alongside
+/// `finalize_reward_bps` (which multiplies `assertion.bond` by `reward_bps`
+/// before dividing by `10_000`). `i128::MAX / 2` was the pre-fix
+/// `MAX_BOND_AMOUNT` and was accepted on its own (see the now-updated
+/// `test_can_initialize_with_bond_amount_exactly_at_max`), but combined with
+/// a nonzero `finalize_reward_bps` it overflows the reward multiply well
+/// before `finalize` gets to divide. It must be rejected now that
+/// `MAX_BOND_AMOUNT` accounts for both constraints.
+#[test]
+fn test_cannot_initialize_with_bond_amount_safe_under_old_bound_but_unsafe_for_reward_multiply() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (token_id, resolvers) = setup(&env);
+    let contract_id = env.register(Tholos, ());
+    let client = TholosClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+
+    let old_bound_bond_amount = i128::MAX / 2;
+    let result = client.try_initialize(
+        &admin,
+        &token_id,
+        &old_bound_bond_amount,
+        &DEFAULT_WINDOW,
+        &resolvers,
+        &MAX_FINALIZE_REWARD_BPS,
+    );
+    assert_eq!(result, Err(Ok(Error::InvalidBondAmount)));
+}
+
+#[test]
 fn test_cannot_initialize_with_zero_challenge_window() {
     let env = Env::default();
     env.mock_all_auths();
@@ -774,6 +931,49 @@ fn test_finalize_max_reward_bps() {
 
     assert_eq!(f.token.balance(&caller), 10);
     assert_eq!(f.token.balance(&asserter), 990);
+}
+
+/// The test that would have caught the finalize reward-multiply overflow
+/// before this merge: `finalize` computes
+/// `assertion.bond * (reward_bps as i128) / 10_000`, multiplying before it
+/// divides. With `bond_amount` at `MAX_BOND_AMOUNT` and `reward_bps` at
+/// `MAX_FINALIZE_REWARD_BPS`, that intermediate product must not overflow
+/// `i128`. Unlike the dispute/resolve overflow this bound also guards
+/// against, this path never touches `dispute` or `resolve` at all --
+/// `assert_outcome` straight into `finalize` is enough to hit it.
+#[test]
+fn test_finalize_reward_multiply_does_not_overflow_at_max_bond_and_max_reward_bps() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (token_id, resolvers) = setup(&env);
+    let token = token::Client::new(&env, &token_id);
+    let contract_id = env.register(Tholos, ());
+    let client = TholosClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    client.initialize(
+        &admin,
+        &token_id,
+        &MAX_BOND_AMOUNT,
+        &DEFAULT_WINDOW,
+        &resolvers,
+        &MAX_FINALIZE_REWARD_BPS,
+    );
+
+    let asserter = Address::generate(&env);
+    token::StellarAssetClient::new(&env, &token_id).mint(&asserter, &MAX_BOND_AMOUNT);
+    let caller = Address::generate(&env);
+
+    let id = client.assert_outcome(&asserter, &true);
+    env.ledger().with_mut(|l| l.timestamp += DEFAULT_WINDOW + 1);
+    let outcome = client.finalize(&caller, &id);
+
+    assert!(outcome);
+    // 1000 bps of MAX_BOND_AMOUNT = MAX_BOND_AMOUNT / 10, computed without
+    // overflowing the intermediate `bond * reward_bps` product.
+    let expected_reward = MAX_BOND_AMOUNT / 10;
+    assert_eq!(token.balance(&caller), expected_reward);
+    assert_eq!(token.balance(&asserter), MAX_BOND_AMOUNT - expected_reward);
 }
 
 #[test]
@@ -1395,7 +1595,7 @@ mod proptest_initialize_bounds {
     /// mirroring the checks in `Tholos::initialize` (resolver count is held
     /// fixed and valid by every call site here, so it is not modeled).
     fn expected_result(bond_amount: i128, challenge_window_secs: u64) -> Result<(), Error> {
-        if bond_amount <= 0 {
+        if bond_amount <= 0 || bond_amount > MAX_BOND_AMOUNT {
             return Err(Error::InvalidBondAmount);
         }
         if challenge_window_secs == 0 || challenge_window_secs > MAX_CHALLENGE_WINDOW_SECS {
