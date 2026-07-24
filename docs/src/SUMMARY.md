@@ -4,6 +4,7 @@
 
 - [Architecture](ARCHITECTURE.md)
     - [Resolver Self-Rotation Design](ROTATION_DESIGN.md)
+- [Protocol v2 Resolution Proposal](V2_RESOLUTION.md)
 - [Contract Reference](CONTRACT.md)
 - [Deployment & Operations](DEPLOYMENT.md)
 - [Integration Guide](INTEGRATION.md)

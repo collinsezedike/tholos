@@ -29,8 +29,10 @@ via `resolve`.
 **Resolver committee**
 The full set of resolvers for a contract instance, set at `initialize` and
 replaceable via `update_resolvers` (admin emergency override) or a self-rotation vote
-(`propose_rotation` / `vote_rotation`, a strict majority of the live committee).
-Must have an odd, non-zero length.
+(`propose_rotation` / `vote_rotation`, a strict majority of the live committee). It
+must be non-empty, have an odd number of members, contain distinct addresses, and
+have no more than `MAX_RESOLVERS` (21) members. Duplicate addresses are rejected
+with `DuplicateResolvers`.
 
 **Rotation**
 A committee-driven, single-slot replacement of one resolver with another, decided by
@@ -40,8 +42,9 @@ snapshotted at `dispute` time). See `docs/src/ROTATION_DESIGN.md`.
 
 **Majority**
 `resolvers.len() / 2 + 1`. The number of matching votes needed to resolve a
-disputed assertion. Always achievable and never ambiguous because the committee
-is odd-length.
+disputed assertion, calculated against the resolver committee snapshotted when
+the dispute opens. An odd-length committee makes the numeric threshold
+unambiguous; reaching it still requires enough available resolver addresses.
 
 **Finalize**
 Closing out a `Pending` assertion after its challenge window has elapsed with no
