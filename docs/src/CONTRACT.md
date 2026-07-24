@@ -62,7 +62,7 @@ State of an assertion: `Pending`, `Disputed`, or `Resolved`.
 | `RotationInProgress` | A rotation proposal is already open; only one may be open at a time |
 | `NoRotationProposal` | No open rotation proposal to vote on or cancel |
 | `ResolverNotInCommittee` | The `old_resolver` named for removal isn't a current resolver |
-| `DuplicateResolver` | The `new_resolver` named for addition is already on the committee (or equals `old_resolver`) |
+| `RotationTargetAlreadyResolver` | The `new_resolver` named for addition is already on the committee (or equals `old_resolver`) |
 | `NotProposer` | Caller isn't the proposer and the proposal can still reach a majority, so can't cancel it |
 
 ## Functions

@@ -1079,7 +1079,7 @@ fn test_cannot_propose_rotation_with_duplicate_new() {
         &f.resolvers.get(1).unwrap(),
         &f.resolvers.get(2).unwrap(), // already on the committee
     );
-    assert_eq!(result, Err(Ok(Error::DuplicateResolver)));
+    assert_eq!(result, Err(Ok(Error::RotationTargetAlreadyResolver)));
 }
 
 #[test]

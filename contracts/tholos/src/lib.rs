@@ -161,7 +161,7 @@ pub enum Error {
     RotationInProgress = 17,
     NoRotationProposal = 18,
     ResolverNotInCommittee = 19,
-    DuplicateResolver = 20,
+    RotationTargetAlreadyResolver = 20,
     NotProposer = 21,
 }
 
@@ -361,7 +361,7 @@ impl Tholos {
     ) -> Result<(), Error> {
         // Audited via: test_cannot_propose_rotation_by_non_resolver (NotAResolver),
         // test_cannot_propose_rotation_for_non_member (ResolverNotInCommittee),
-        // test_cannot_propose_rotation_with_duplicate_new (DuplicateResolver),
+        // test_cannot_propose_rotation_with_duplicate_new (RotationTargetAlreadyResolver),
         // test_rotation_in_progress_blocks_second_proposal (RotationInProgress).
         let committee: Vec<Address> = Self::get(&env, &DataKey::Resolvers)?;
         resolver.require_auth();
@@ -375,7 +375,7 @@ impl Tholos {
             return Err(Error::ResolverNotInCommittee);
         }
         if committee.contains(&new_resolver) || old_resolver == new_resolver {
-            return Err(Error::DuplicateResolver);
+            return Err(Error::RotationTargetAlreadyResolver);
         }
 
         let proposal = RotationProposal {
