@@ -40,6 +40,16 @@ All notable changes to this project are documented here. Format follows
   CI could previously pass without ever building, testing, or linting it.
   Closes #43.
 
+- Resolver self-rotation: the committee can now replace one of its own by a strict
+  majority vote (`propose_rotation`, `vote_rotation`, `cancel_rotation`), removing
+  the admin as the only path to committee membership. `update_resolvers` remains as
+  the emergency override; both paths emit `ResolversUpdated`, and rotation adds
+  `RotationProposed` / `RotationExecuted` / `RotationCancelled` for the governance
+  trail. One rotation may be open at a time, with a deterministic deadlock guard so a
+  lost proposer key can't block rotation. Writes the same `Resolvers` slot as
+  `update_resolvers`, so it has no effect on disputes already open (their committee
+  is snapshotted at `dispute` time). Design in `docs/src/ROTATION_DESIGN.md`. Closes
+  the self-rotation item from CONTRACT.md's Known gaps.
 - A design-only protocol v2 proposal for stake-weighted voting by bond posters,
   including eligibility and weight snapshots, settlement, threat analysis, and a
   blue/green migration path for existing v1 deployments. No contract behavior or
@@ -92,6 +102,11 @@ All notable changes to this project are documented here. Format follows
   silently defaulting via `.unwrap_or(0)`. No observable behavior change (the
   pause check already fails first on an uninitialized contract), but removes
   an inconsistent pattern. Closes #5.
+- Added regression tests for `Error::NoRotationProposal`, triggered via both
+  `vote_rotation` and `cancel_rotation` when no proposal is open. This closes the
+  last CONTRIBUTING.md gap where a new `Error` variant introduced by the
+  self-rotation feature lacked a triggering test; every new `Error` variant now
+  has one.
 
 ## [0.2.0] - 2026-07-10
 

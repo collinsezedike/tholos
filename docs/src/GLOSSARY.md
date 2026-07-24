@@ -28,9 +28,17 @@ via `resolve`.
 
 **Resolver committee**
 The full set of resolvers for a contract instance, set at `initialize` and
-replaceable via `update_resolvers`. It must be non-empty, have an odd number of
-members, contain distinct addresses, and have no more than `MAX_RESOLVERS` (21)
-members. Duplicate addresses are rejected with `DuplicateResolvers`.
+replaceable via `update_resolvers` (admin emergency override) or a self-rotation vote
+(`propose_rotation` / `vote_rotation`, a strict majority of the live committee). It
+must be non-empty, have an odd number of members, contain distinct addresses, and
+have no more than `MAX_RESOLVERS` (21) members. Duplicate addresses are rejected
+with `DuplicateResolvers`.
+
+**Rotation**
+A committee-driven, single-slot replacement of one resolver with another, decided by
+a strict majority of the live committee. The day-to-day alternative to admin
+`update_resolvers`; does not affect disputes already open (their committee was
+snapshotted at `dispute` time). See `docs/src/ROTATION_DESIGN.md`.
 
 **Majority**
 `resolvers.len() / 2 + 1`. The number of matching votes needed to resolve a
